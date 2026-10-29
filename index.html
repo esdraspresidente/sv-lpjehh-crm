@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<meta name="theme-color" content="#1E293B"/>
+<title>Vendas de Sites — CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!--
+  CRM de venda de sites, LPs e apps (sociedade Esdras + Jehh).
+
+  Mesmo desenho do previmater-crm: arquivo único, sem build, PostgREST
+  direto com RLS, roteador por hash. NÃO é cópia do index.html da Prev:
+  aquele tem 11.300 linhas presas a ~120 colunas de INSS, GPS e contrato
+  judicial. Cortar daria centenas de referências quebradas. Aqui só os
+  blocos que se aplicam: login, kanban com arrastar, cartão, chat,
+  checklist, inbox, fila e configuração.
+
+  TABELAS: só sv_lpjehh_*. Nunca crm_*.
+
+  O CRM NÃO ENVIA WHATSAPP. Mensagem escrita aqui vira uma linha
+  'manual' em sv_lpjehh_automacoes e quem entrega é o motor, na rodada
+  seguinte (no máximo 1 minuto). Mesmo modelo da Prev: um caminho de
+  envio só, com as mesmas travas de horário, ritmo e confirmação.
+-->
+<style>
+:root{
+  --brand:#2563EB;--brand-d:#1D4ED8;--brand-l:#E8EFFE;
+  --bg:#F4F6FA;--white:#FFFFFF;
+  --text:#0F172A;--text2:#475569;--text3:#94A3B8;
+  --border:#E2E8F0;--border2:#EEF2F7;
+  --green:#15803D;--green-bg:#DCFCE7;
+  --yellow:#A16207;--yellow-bg:#FEF9C3;
+  --red:#B91C1C;--red-bg:#FEE2E2;
+  --purple:#6D28D9;--purple-bg:#EDE9FE;
+  --r:10px;--rl:14px;--sw:232px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+.h{display:none!important}
+
+/* ---------- login ---------- */
+#login{min-height:100%;display:flex;align-items:center;justify-content:center;padding:16px}
+.lg-box{background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:28px;width:100%;max-width:360px}
+.lg-box h1{font-size:20px;margin-bottom:4px}
+.lg-box p{color:var(--text2);margin-bottom:18px;font-size:13px}
+
+/* ---------- formulário ---------- */
+.f{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.f label{font-size:12px;font-weight:600;color:var(--text2)}
+.f input,.f select,.f textarea{border:1px solid var(--border);border-radius:8px;padding:9px 10px;background:var(--white);width:100%}
+.f textarea{min-height:80px;resize:vertical}
+.f input:focus,.f select:focus,.f textarea:focus{outline:2px solid var(--brand-l);border-color:var(--brand)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+@media(max-width:560px){.g2{grid-template-columns:1fr}}
+.btn{border:1px solid var(--border);background:var(--white);border-radius:8px;padding:8px 14px;font-weight:600}
+.btn:hover{background:var(--bg)}
+.btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.pri:hover{background:var(--brand-d)}
+.btn.red{color:var(--red);border-color:#FECACA}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:default}
+.erro{color:var(--red);font-size:13px;min-height:18px}
+
+/* ---------- layout ---------- */
+#app{display:flex;min-height:100%}
+#side{width:var(--sw);background:#0F172A;color:#CBD5E1;padding:18px 12px;display:flex;flex-direction:column;gap:4px;position:fixed;top:0;bottom:0;left:0}
+#side .marca{color:#fff;font-weight:800;font-size:16px;padding:4px 10px 16px}
+#side a{color:inherit;text-decoration:none;padding:9px 10px;border-radius:8px;display:flex;justify-content:space-between;align-items:center}
+#side a:hover{background:#1E293B}
+#side a.on{background:#1E293B;color:#fff;font-weight:600}
+#side .rod{margin-top:auto;font-size:12px;padding:10px;color:#94A3B8}
+#side .rod button{background:none;border:none;color:#CBD5E1;text-decoration:underline;padding:0}
+.badge{background:var(--red);color:#fff;border-radius:99px;font-size:11px;padding:1px 7px;font-weight:700}
+#main{margin-left:var(--sw);flex:1;min-width:0;padding:20px}
+#topo{display:none}
+@media(max-width:820px){
+  #side{transform:translateX(-100%);transition:transform .2s;z-index:50}
+  #side.aberto{transform:none}
+  #main{margin-left:0;padding:12px}
+  #topo{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  #topo button{border:1px solid var(--border);background:var(--white);border-radius:8px;padding:6px 10px}
+}
+.cab{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.cab h2{font-size:18px}
+.emp{padding:40px;text-align:center;color:var(--text3)}
+
+/* ---------- kanban ---------- */
+.kb{display:flex;gap:12px;overflow-x:auto;padding-bottom:12px;align-items:flex-start;min-height:calc(100vh - 110px)}
+.col{background:#EAEEF4;border-radius:var(--rl);width:272px;flex:0 0 272px;display:flex;flex-direction:column;max-height:calc(100vh - 110px)}
+.col-h{padding:10px 12px;display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px}
+.col-h .pt{width:9px;height:9px;border-radius:50%}
+.col-h .qt{margin-left:auto;color:var(--text2);font-weight:600}
+.col-b{padding:0 8px 8px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:40px}
+.col-b.alvo{background:var(--brand-l);border-radius:10px}
+.cd{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px;cursor:pointer}
+.cd:hover{border-color:var(--brand)}
+.cd.arrastando{opacity:.4}
+.cd .n{font-weight:700;margin-bottom:2px;word-break:break-word}
+.cd .e{color:var(--text2);font-size:12px}
+.cd .rod{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center}
+.tag{font-size:11px;border-radius:6px;padding:2px 7px;font-weight:600;background:var(--bg);color:var(--text2)}
+.tag.prod{background:var(--brand-l);color:var(--brand-d)}
+.tag.ok{background:var(--green-bg);color:var(--green)}
+.tag.alerta{background:var(--yellow-bg);color:var(--yellow)}
+.tag.mal{background:var(--red-bg);color:var(--red)}
+.tag.pausa{background:var(--purple-bg);color:var(--purple)}
+
+/* ---------- cartão (modal) ---------- */
+#modal{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:100;display:flex;justify-content:flex-end}
+#mbox{background:var(--bg);width:min(980px,100%);height:100%;overflow:hidden;display:flex;flex-direction:column}
+.m-h{background:var(--white);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;gap:10px}
+.m-h h3{font-size:16px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m-b{flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 380px}
+@media(max-width:820px){.m-b{grid-template-columns:1fr;overflow-y:auto}}
+.m-esq{overflow-y:auto;padding:16px}
+.m-dir{border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--white)}
+@media(max-width:820px){.m-dir{border-left:none;border-top:1px solid var(--border);min-height:520px}}
+.sec{background:var(--white);border:1px solid var(--border);border-radius:var(--rl);padding:14px;margin-bottom:12px}
+.sec h4{font-size:13px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.chat{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:6px;background:#F1F5F9}
+.bl{max-width:85%;padding:7px 10px;border-radius:10px;white-space:pre-wrap;word-break:break-word;font-size:13px}
+.bl.ent{background:var(--white);border:1px solid var(--border);align-self:flex-start}
+.bl.sai{background:#DBEAFE;align-self:flex-end}
+.bl.sai.agente{background:#E0E7FF}
+.bl .q{display:block;font-size:10px;color:var(--text3);margin-top:3px;text-align:right}
+.chat-in{border-top:1px solid var(--border);padding:8px;display:flex;gap:6px;align-items:flex-end}
+.chat-in textarea{flex:1;border:1px solid var(--border);border-radius:8px;padding:8px;min-height:40px;max-height:140px;resize:vertical}
+.chk{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2)}
+.chk:last-child{border-bottom:none}
+.chk .tx{flex:1;word-break:break-word}
+.chk.feito .tx{text-decoration:line-through;color:var(--text3)}
+.chk .mt{font-size:11px;color:var(--text3)}
+.lin{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border2);font-size:13px}
+.lin:last-child{border-bottom:none}
+.mini{font-size:12px;color:var(--text2)}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:4px 10px;font-size:13px}
+.kv b{color:var(--text2);font-weight:600}
+
+/* ---------- tabelas ---------- */
+.tb{background:var(--white);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden}
+.tr{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border2);align-items:flex-start}
+.tr:last-child{border-bottom:none}
+.tr.click{cursor:pointer}
+.tr.click:hover{background:var(--bg)}
+.tr .grow{flex:1;min-width:0}
+.tr .prev{color:var(--text2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.abas{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.abas button{border:1px solid var(--border);background:var(--white);border-radius:99px;padding:6px 12px;font-weight:600;font-size:13px}
+.abas button.on{background:var(--text);color:#fff;border-color:var(--text)}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#0F172A;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;font-size:13px;max-width:90%}
+</style>
+</head>
+<body>
+
+<div id="login" class="h">
+  <div class="lg-box">
+    <h1>Vendas de Sites</h1>
+    <p>Entre com o e-mail e a senha do seu acesso.</p>
+    <div class="f"><label>E-mail</label><input id="lg-em" type="email" autocomplete="username"/></div>
+    <div class="f"><label>Senha</label><input id="lg-pw" type="password" autocomplete="current-password"/></div>
+    <div class="erro" id="lg-err"></div>
+    <button class="btn pri" style="width:100%" id="lg-btn">Entrar</button>
+  </div>
+</div>
+
+<div id="app" class="h">
+  <nav id="side">
+    <div class="marca">Vendas de Sites</div>
+    <a href="#/quadro/comercial" data-nav="comercial">Comercial</a>
+    <a href="#/quadro/producao" data-nav="producao">Produção</a>
+    <a href="#/inbox" data-nav="inbox">Caixa de entrada <span class="badge h" id="bdg-inbox"></span></a>
+    <a href="#/fila" data-nav="fila">Fila <span class="badge h" id="bdg-fila"></span></a>
+    <a href="#/config" data-nav="config" class="so-socio">Configuração</a>
+    <div class="rod"><div id="quem"></div><button id="btn-sair">Sair</button></div>
+  </nav>
+  <main id="main">
+    <div id="topo"><button id="btn-menu">☰</button><b>Vendas de Sites</b></div>
+    <div id="pc"></div>
+  </main>
+</div>
+
+<div id="modal" class="h"><div id="mbox"></div></div>
+<div id="toast" class="h"></div>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+const SUPABASE_URL='https://ggyngtqknonwnohbzkyj.supabase.co';
+// Chave anon: é pública por definição. Quem protege os dados é a RLS
+// das tabelas sv_lpjehh_* (função sv_lpjehh_ativo / sv_lpjehh_socio).
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdneW5ndHFrbm9ud25vaGJ6a3lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5ODA4NzcsImV4cCI6MjA5NDU1Njg3N30.0zYn_V9gBtRNWivAHfps6u68akb0mTc7Ix8ZD38OD0I';
+// storageKey PRÓPRIA: este app e o CRM da Prev ficam na mesma origem
+// (esdraspresidente.github.io) e no mesmo projeto Supabase. Com a chave
+// padrão os dois dividiriam a sessão: sair de um derrubaria o outro, e
+// entrar com um usuário num trocaria o usuário do outro.
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{storageKey:'sv-lpjehh-auth',persistSession:true}});
+const BUCKET='sv-lpjehh-anexos';
+const PRODUTOS={lp:'Landing page',site:'Site',app:'App',outro:'Outro'};
+const BRIEFING={FALTA_DADO:['Briefing incompleto','alerta'],BRIEFING_OK:['Briefing completo','ok'],FORA_PERFIL:['Fora do perfil','mal']};
+
+let U=null;              // linha do usuário em sv_lpjehh_usuarios
+let LISTAS=[];           // todas as listas (os dois quadros)
+let USUARIOS=[];         // para o responsável do checklist
+let POLL=null;           // atualização do cartão aberto
+let POLL_BADGE=null;     // contadores da barra lateral
+
+// ============================================================
+// UTILITÁRIOS
+// ============================================================
+const $=id=>document.getElementById(id);
+// TODO texto que vem do banco passa por aqui antes de ir para o HTML.
+// Mensagem de cliente é texto livre de estranho: sem isso, um "<img
+// onerror=...>" no WhatsApp rodaria script na tela de quem atende.
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function toast(msg,ms=2800){const t=$('toast');t.textContent=msg;t.classList.remove('h');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.add('h'),ms);}
+function dataHora(iso){if(!iso)return '';const d=new Date(iso);return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
+function dataBR(iso){if(!iso)return '';const [a,m,d]=String(iso).slice(0,10).split('-');return d+'/'+m+'/'+a;}
+function dinheiro(v){if(v===null||v===undefined||v==='')return '';return Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
+function haQuanto(iso){
+  if(!iso)return '';
+  const min=Math.floor((Date.now()-new Date(iso).getTime())/60000);
+  if(min<60)return min+' min';
+  const h=Math.floor(min/60); if(h<24)return h+' h';
+  return Math.floor(h/24)+' d';
+}
+function diasDesde(iso){return iso?(Date.now()-new Date(iso).getTime())/86400000:0;}
+function listaPorId(id){return LISTAS.find(l=>l.id===id);}
+function falhou(error,oque){if(!error)return false;console.error(oque,error);toast('Erro ao '+oque+': '+error.message,5000);return true;}
+function ehSocio(){return U&&U.nivel==='socio';}
+function numOuNull(v){if(v===''||v===null||v===undefined)return null;const n=Number(String(v).replace(/\./g,'').replace(',','.'));return Number.isFinite(n)?n:null;}
+
+// ============================================================
+// LOGIN
+// O cadastro público do Supabase está desligado: só entra quem foi
+// convidado E tem linha ativa em sv_lpjehh_usuarios. Login válido sem
+// essa linha (ex.: usuário do CRM da Prev) cai em "sem acesso" — a RLS
+// já barraria tudo, a tela só diz isso com clareza.
+// ============================================================
+async function iniciar(){
+  const{data:{session}}=await sb.auth.getSession();
+  if(!session){mostrarLogin();return;}
+  const{data,error}=await sb.from('sv_lpjehh_usuarios').select('*').eq('auth_user_id',session.user.id).eq('ativo',true).limit(1);
+  if(error||!data||!data.length){
+    await sb.auth.signOut();
+    mostrarLogin('Este login não tem acesso a este app.');
+    return;
+  }
+  U=data[0];
+  $('login').classList.add('h');
+  $('app').classList.remove('h');
+  $('quem').textContent=U.nome+(ehSocio()?' · sócio':'');
+  document.querySelectorAll('.so-socio').forEach(e=>e.classList.toggle('h',!ehSocio()));
+  await carregarBase();
+  atualizarBadges();
+  clearInterval(POLL_BADGE);POLL_BADGE=setInterval(atualizarBadges,30000);
+  route();
+}
+function mostrarLogin(msg){
+  $('app').classList.add('h');$('login').classList.remove('h');
+  $('lg-err').textContent=msg||'';
+}
+async function entrar(){
+  const em=$('lg-em').value.trim(),pw=$('lg-pw').value;
+  if(!em||!pw){$('lg-err').textContent='Preencha e-mail e senha.';return;}
+  $('lg-btn').disabled=true;$('lg-err').textContent='';
+  const{error}=await sb.auth.signInWithPassword({email:em,password:pw});
+  $('lg-btn').disabled=false;
+  if(error){$('lg-err').textContent='E-mail ou senha incorretos.';return;}
+  iniciar();
+}
+$('lg-btn').onclick=entrar;
+$('lg-pw').addEventListener('keydown',e=>{if(e.key==='Enter')entrar();});
+$('btn-sair').onclick=async()=>{await sb.auth.signOut();location.hash='';location.reload();};
+$('btn-menu').onclick=()=>$('side').classList.toggle('aberto');
+
+async function carregarBase(){
+  const[l,u]=await Promise.all([
+    sb.from('sv_lpjehh_listas').select('*').eq('arquivada',false).order('quadro').order('ordem'),
+    sb.from('sv_lpjehh_usuarios').select('id,nome').eq('ativo',true).order('nome')
+  ]);
+  if(!falhou(l.error,'carregar listas'))LISTAS=l.data||[];
+  // Vendedor só enxerga a própria linha (RLS); nesse caso o responsável
+  // do checklist fica restrito a ele mesmo, o que é o comportamento certo.
+  if(!u.error)USUARIOS=u.data||[];
+}
+
+// ============================================================
+// ROTEADOR (mesmo padrão da Prev: hash, uma função page* por rota)
+// ============================================================
+function marcarNav(n){document.querySelectorAll('#side a').forEach(a=>a.classList.toggle('on',a.dataset.nav===n));$('side').classList.remove('aberto');}
+function route(){
+  if(!U)return;
+  const r=(location.hash.slice(1)||'/').split('?')[0];
+  if(r==='/'){location.hash='#/quadro/comercial';return;}
+  let m;
+  if(m=r.match(/^\/quadro\/(comercial|producao)$/))return pageQuadro(m[1]);
+  if(m=r.match(/^\/cliente\/([0-9a-f-]{36})$/)){location.replace('#/quadro/comercial');setTimeout(()=>abrirCard(m[1]),0);return;}
+  if(r==='/inbox')return pageInbox();
+  if(r==='/fila')return pageFila();
+  if(r==='/config'&&ehSocio())return pageConfig();
+  $('pc').innerHTML='<div class="emp">Tela não encontrada</div>';
+}
+window.addEventListener('hashchange',route);
+
+// ============================================================
+// CONTADORES DA BARRA LATERAL
+// ============================================================
+async function atualizarBadges(){
+  const[f,i]=await Promise.all([
+    sb.from('sv_lpjehh_automacoes').select('id',{count:'exact',head:true}).eq('status','aguardando_aprovacao').neq('tipo_automacao','aviso_socio'),
+    contarEsperando()
+  ]);
+  const pinta=(id,n)=>{const b=$(id);b.textContent=n;b.classList.toggle('h',!n);};
+  pinta('bdg-fila',f.count||0);
+  pinta('bdg-inbox',i);
+}
+
+// ============================================================
+// KANBAN
+// Desktop: arrastar e soltar entre colunas. Celular: o arrastar do
+// HTML5 não funciona em toque, então lá a troca de lista é pelo seletor
+// "Lista" dentro do cartão. Mesma escrita no banco nos dois casos.
+// ============================================================
+let QUADRO_ATUAL='comercial';
+async function pageQuadro(q){
+  QUADRO_ATUAL=q;marcarNav(q);
+  const listas=LISTAS.filter(l=>l.quadro===q);
+  $('pc').innerHTML='<div class="cab"><h2>'+(q==='comercial'?'Comercial':'Produção')+'</h2>'+
+    '<div style="display:flex;gap:8px"><input id="kb-busca" placeholder="Buscar nome, empresa, telefone" style="border:1px solid var(--border);border-radius:8px;padding:7px 10px;min-width:220px"/>'+
+    '<button class="btn pri" id="kb-novo">+ Novo card</button></div></div><div class="kb" id="kb"><div class="emp">Carregando…</div></div>';
+  $('kb-novo').onclick=()=>novoCard(q);
+  $('kb-busca').oninput=()=>filtrarKanban($('kb-busca').value);
+  const{data,error}=await sb.from('sv_lpjehh_clientes')
+    .select('id,nome,empresa,telefone_principal,produto,valor_proposta,valor_fechado,lista_id,posicao,lista_desde,briefing,agente_pausado,escalado_em,prazo_desejado')
+    .eq('quadro',q).is('arquivado_em',null).order('posicao').order('criado_em',{ascending:false}).limit(1000);
+  if(falhou(error,'carregar o quadro'))return;
+  const porLista={};listas.forEach(l=>porLista[l.id]=[]);
+  const semLista=[];
+  (data||[]).forEach(c=>{(porLista[c.lista_id]||semLista).push(c);});
+  // Card sem lista (ex.: lista apagada) vai para a primeira coluna, para
+  // não sumir da tela. Ele aparece, e mover salva a lista certa.
+  if(semLista.length&&listas[0])porLista[listas[0].id]=semLista.concat(porLista[listas[0].id]);
+  $('kb').innerHTML=listas.map(l=>{
+    const cards=porLista[l.id];
+    return '<div class="col"><div class="col-h"><span class="pt" style="background:'+esc(l.cor)+'"></span>'+esc(l.nome)+'<span class="qt">'+cards.length+'</span></div>'+
+      '<div class="col-b" data-lista="'+l.id+'">'+cards.map(c=>cardHtml(c,l)).join('')+'</div></div>';
+  }).join('')||'<div class="emp">Nenhuma lista neste quadro.</div>';
+  ligarArrastar();
+}
+function cardHtml(c,l){
+  const tags=[];
+  if(c.produto)tags.push('<span class="tag prod">'+esc(PRODUTOS[c.produto]||c.produto)+'</span>');
+  const v=c.valor_fechado??c.valor_proposta;
+  if(v)tags.push('<span class="tag">'+dinheiro(v)+'</span>');
+  if(c.briefing&&BRIEFING[c.briefing])tags.push('<span class="tag '+BRIEFING[c.briefing][1]+'">'+BRIEFING[c.briefing][0]+'</span>');
+  if(c.agente_pausado)tags.push('<span class="tag pausa">Agente pausado</span>');
+  if(c.escalado_em)tags.push('<span class="tag mal">Pediu humano</span>');
+  // Parado demais na lista: abandono_dias vem da própria lista, editável
+  // no banco sem deploy.
+  const parado=l&&l.abandono_dias&&diasDesde(c.lista_desde)>l.abandono_dias;
+  tags.push('<span class="tag'+(parado?' alerta':'')+'" title="Tempo nesta lista">'+haQuanto(c.lista_desde)+'</span>');
+  const busca=[c.nome,c.empresa,c.telefone_principal].join(' ').toLowerCase();
+  return '<div class="cd" draggable="true" data-id="'+c.id+'" data-busca="'+esc(busca)+'">'+
+    '<div class="n">'+esc(c.nome||'Sem nome')+'</div>'+
+    (c.empresa?'<div class="e">'+esc(c.empresa)+'</div>':'')+
+    '<div class="rod">'+tags.join('')+'</div></div>';
+}
+function filtrarKanban(t){
+  t=t.trim().toLowerCase();
+  document.querySelectorAll('#kb .cd').forEach(el=>el.classList.toggle('h',!!t&&!el.dataset.busca.includes(t)));
+}
+function ligarArrastar(){
+  let arrastado=null;
+  document.querySelectorAll('#kb .cd').forEach(el=>{
+    el.onclick=()=>abrirCard(el.dataset.id);
+    el.ondragstart=e=>{arrastado=el;el.classList.add('arrastando');e.dataTransfer.effectAllowed='move';};
+    el.ondragend=()=>{el.classList.remove('arrastando');document.querySelectorAll('.col-b').forEach(c=>c.classList.remove('alvo'));};
+  });
+  document.querySelectorAll('#kb .col-b').forEach(col=>{
+    col.ondragover=e=>{e.preventDefault();col.classList.add('alvo');};
+    col.ondragleave=()=>col.classList.remove('alvo');
+    col.ondrop=async e=>{
+      e.preventDefault();col.classList.remove('alvo');
+      if(!arrastado)return;
+      const depois=[...col.querySelectorAll('.cd:not(.arrastando)')].find(c=>{const r=c.getBoundingClientRect();return e.clientY<r.top+r.height/2;});
+      col.insertBefore(arrastado,depois||null);
+      await salvarPosicoes(col,arrastado.dataset.id);
+    };
+  });
+}
+// Regrava posição de TODOS os cards da coluna destino. Simples e
+// correto para colunas de dezenas de cards; o gatilho do banco cuida de
+// lista_desde e do histórico quando a lista muda.
+async function salvarPosicoes(col,movidoId){
+  const listaId=col.dataset.lista;
+  const ids=[...col.querySelectorAll('.cd')].map(c=>c.dataset.id);
+  const r=await sb.from('sv_lpjehh_clientes').update({lista_id:listaId,posicao:ids.indexOf(movidoId)}).eq('id',movidoId);
+  if(falhou(r.error,'mover o card')){pageQuadro(QUADRO_ATUAL);return;}
+  await Promise.all(ids.map((id,i)=>id===movidoId?null:sb.from('sv_lpjehh_clientes').update({posicao:i}).eq('id',id)));
+  // Recarrega para atualizar contadores e o "tempo nesta lista".
+  pageQuadro(QUADRO_ATUAL);
+}
+async function novoCard(q){
+  const nome=prompt('Nome do cliente:');
+  if(!nome||!nome.trim())return;
+  const tel=prompt('WhatsApp com DDD (opcional):')||'';
+  const dig=tel.replace(/\D/g,'');
+  // Mesma chave do webhook (DDD + 8 últimos dígitos). Se divergir, a
+  // primeira mensagem desse cliente criaria um segundo card.
+  let chave=null;
+  if(dig){let d=dig;if((d.length===12||d.length===13)&&d.startsWith('55'))d=d.slice(2);if(d.length>=10)chave=d.slice(0,2)+d.slice(-8);}
+  const primeira=LISTAS.find(l=>l.quadro===q);
+  const{data,error}=await sb.from('sv_lpjehh_clientes').insert({nome:nome.trim(),telefone_principal:dig||null,telefone_chave:chave,quadro:q,lista_id:primeira?.id||null,origem:'manual'}).select('id').limit(1);
+  if(error&&error.code==='23505'){toast('Já existe um card com esse telefone.',4000);return;}
+  if(falhou(error,'criar o card'))return;
+  await pageQuadro(q);
+  abrirCard(data[0].id);
+}
+
+// ============================================================
+// CARTÃO
+// Esquerda: dados, briefing, checklist, anexos, histórico.
+// Direita: conversa do WhatsApp (atualiza a cada 10 s enquanto aberto).
+// ============================================================
+let CARD=null;
+async function abrirCard(id){
+  const{data,error}=await sb.from('sv_lpjehh_clientes').select('*').eq('id',id).limit(1);
+  if(falhou(error,'abrir o card'))return;
+  if(!data||!data.length){toast('Card não encontrado.');return;}
+  CARD=data[0];
+  $('modal').classList.remove('h');
+  desenharCard();
+  carregarChat();carregarChecklist();carregarAnexos();carregarAtividades();carregarEtiquetas();
+  clearInterval(POLL);POLL=setInterval(carregarChat,10000);
+}
+function fecharCard(){
+  // Fechar com alteração não salva perderia o que foi digitado em
+  // silêncio. Pergunta antes.
+  if(cardAlterado()&&!confirm('Há alterações não salvas. Fechar mesmo assim?'))return;
+  clearInterval(POLL);POLL=null;CARD=null;
+  $('modal').classList.add('h');$('mbox').innerHTML='';
+  if(location.hash.startsWith('#/quadro/'))pageQuadro(QUADRO_ATUAL);
+}
+$('modal').addEventListener('click',e=>{if(e.target.id==='modal')fecharCard();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('modal').classList.contains('h'))fecharCard();});
+
+const CAMPOS=['nome','empresa','segmento','cidade','email','telefone_principal','produto','valor_proposta','valor_fechado','prazo_desejado','observacoes'];
+function valorCampo(k){const el=$('c-'+k);return el?el.value:'';}
+function cardAlterado(){
+  if(!CARD)return false;
+  return CAMPOS.some(k=>{
+    const atual=valorCampo(k),orig=CARD[k];
+    if(k.startsWith('valor_'))return numOuNull(atual)!==(orig===null?null:Number(orig));
+    return (atual||'')!==(orig==null?'':String(orig));
+  });
+}
+function desenharCard(){
+  const c=CARD;
+  const listasDoQuadro=LISTAS.filter(l=>l.quadro===c.quadro);
+  const opcLista=listasDoQuadro.map(l=>'<option value="'+l.id+'"'+(l.id===c.lista_id?' selected':'')+'>'+esc(l.nome)+'</option>').join('');
+  const opcProd='<option value="">—</option>'+Object.entries(PRODUTOS).map(([k,v])=>'<option value="'+k+'"'+(c.produto===k?' selected':'')+'>'+v+'</option>').join('');
+  const fone=String(c.telefone_principal||'').replace(/\D/g,'');
+  $('mbox').innerHTML=
+  '<div class="m-h"><h3>'+esc(c.nome||'Sem nome')+'</h3>'+
+    (fone?'<a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/'+(fone.length<=11?'55':'')+fone+'">WhatsApp</a>':'')+
+    '<button class="btn sm" id="m-fechar">Fechar</button></div>'+
+  '<div class="m-b"><div class="m-esq">'+
+    '<div class="sec"><h4>Situação</h4><div class="g2">'+
+      '<div class="f"><label>Quadro</label><select id="c-quadro"><option value="comercial"'+(c.quadro==='comercial'?' selected':'')+'>Comercial</option><option value="producao"'+(c.quadro==='producao'?' selected':'')+'>Produção</option></select></div>'+
+      '<div class="f"><label>Lista</label><select id="c-lista">'+opcLista+'</select></div></div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn sm" id="c-agente">'+(c.agente_pausado?'▶ Retomar agente':'⏸ Pausar agente')+'</button>'+
+        (c.escalado_em?'<button class="btn sm" id="c-escalado">Marcar pedido de humano como resolvido</button>':'')+
+        '<button class="btn sm red" id="c-arquivar">'+(c.arquivado_em?'Desarquivar':'Arquivar')+'</button>'+
+      '</div>'+
+      '<div id="c-etq" style="margin-top:10px"></div>'+
+    '</div>'+
+    '<div class="sec"><h4>Dados <button class="btn sm pri" id="c-salvar">Salvar</button></h4>'+
+      '<div class="g2">'+
+        campo('nome','Nome',c.nome)+campo('empresa','Empresa',c.empresa)+
+        campo('segmento','Segmento',c.segmento)+campo('cidade','Cidade',c.cidade)+
+        campo('telefone_principal','WhatsApp',c.telefone_principal)+campo('email','E-mail',c.email,'email')+
+        '<div class="f"><label>Produto</label><select id="c-produto">'+opcProd+'</select></div>'+
+        campo('prazo_desejado','Prazo desejado',c.prazo_desejado,'date')+
+        campo('valor_proposta','Valor da proposta',c.valor_proposta)+campo('valor_fechado','Valor fechado',c.valor_fechado)+
+      '</div>'+
+      '<div class="f"><label>Observações</label><textarea id="c-observacoes">'+esc(c.observacoes)+'</textarea></div>'+
+    '</div>'+
+    briefingHtml(c)+
+    '<div class="sec"><h4>Checklist</h4><div id="c-chk"></div>'+
+      '<div style="display:flex;gap:6px;margin-top:8px"><input id="c-chk-novo" placeholder="Novo item (ex.: layout aprovado)" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:7px 10px"/><button class="btn sm" id="c-chk-add">Adicionar</button></div></div>'+
+    '<div class="sec"><h4>Anexos <label class="btn sm">Enviar arquivo<input type="file" id="c-up" class="h"/></label></h4><div id="c-anx"></div></div>'+
+    '<div class="sec"><h4>Histórico</h4><div id="c-ativ"></div></div>'+
+  '</div>'+
+  '<div class="m-dir"><div class="chat" id="c-chat"><div class="emp">Carregando…</div></div>'+
+    '<div class="chat-in"><textarea id="c-msg" placeholder="Mensagem para o cliente (sai pelo motor em até 1 min)"></textarea><button class="btn pri" id="c-enviar">Enviar</button></div>'+
+  '</div></div>';
+  $('m-fechar').onclick=fecharCard;
+  $('c-salvar').onclick=salvarCard;
+  $('c-lista').onchange=()=>mudarLista($('c-lista').value);
+  $('c-quadro').onchange=()=>mudarQuadro($('c-quadro').value);
+  $('c-agente').onclick=togAgente;
+  if($('c-escalado'))$('c-escalado').onclick=resolverEscalado;
+  $('c-arquivar').onclick=togArquivar;
+  $('c-chk-add').onclick=addChecklist;
+  $('c-chk-novo').addEventListener('keydown',e=>{if(e.key==='Enter')addChecklist();});
+  $('c-up').onchange=enviarAnexo;
+  $('c-enviar').onclick=enviarMensagem;
+}
+function campo(k,rot,v,tipo){
+  return '<div class="f"><label>'+rot+'</label><input id="c-'+k+'" type="'+(tipo||'text')+'" value="'+esc(v)+'"/></div>';
+}
+// O briefing é preenchido pelo agente (agente_dados) e julgado por
+// regra no motor (coluna briefing). Aqui só se mostra: editar o que o
+// agente coletou sem passar pela regra deixaria o status mentindo.
+function briefingHtml(c){
+  const d=c.agente_dados||{};
+  const chaves=Object.keys(d);
+  const st=c.briefing&&BRIEFING[c.briefing]?'<span class="tag '+BRIEFING[c.briefing][1]+'">'+BRIEFING[c.briefing][0]+'</span>':'<span class="tag">Sem avaliação</span>';
+  return '<div class="sec"><h4>Briefing coletado pelo agente '+st+'</h4>'+
+    (chaves.length?'<div class="kv">'+chaves.map(k=>'<b>'+esc(k.replace(/_/g,' '))+'</b><span>'+esc(typeof d[k]==='object'?JSON.stringify(d[k]):d[k])+'</span>').join('')+'</div>'
+      :'<div class="mini">Nada coletado ainda.</div>')+'</div>';
+}
+async function salvarCard(){
+  const up={};
+  CAMPOS.forEach(k=>{
+    let v=valorCampo(k);
+    if(k.startsWith('valor_'))v=numOuNull(v);
+    else v=(v||'').trim()||null;
+    up[k]=v;
+  });
+  if(!up.nome){toast('O nome não pode ficar vazio.');return;}
+  // Telefone mudou → recalcula a chave, senão a próxima mensagem do
+  // cliente cria outro card.
+  if(up.telefone_principal!==CARD.telefone_principal){
+    let d=String(up.telefone_principal||'').replace(/\D/g,'');
+    if((d.length===12||d.length===13)&&d.startsWith('55'))d=d.slice(2);
+    up.telefone_chave=d.length>=10?d.slice(0,2)+d.slice(-8):null;
+  }
+  $('c-salvar').disabled=true;
+  const{data,error}=await sb.from('sv_lpjehh_clientes').update(up).eq('id',CARD.id).select('*').limit(1);
+  $('c-salvar').disabled=false;
+  if(error&&error.code==='23505'){toast('Outro card já usa esse telefone.',4000);return;}
+  if(falhou(error,'salvar'))return;
+  CARD=data[0];
+  $('mbox').querySelector('.m-h h3').textContent=CARD.nome;
+  toast('Salvo.');
+}
+async function mudarLista(listaId){
+  const{data,error}=await sb.from('sv_lpjehh_clientes').update({lista_id:listaId,posicao:0}).eq('id',CARD.id).select('*').limit(1);
+  if(falhou(error,'mudar de lista'))return;
+  CARD=data[0];carregarAtividades();toast('Movido para '+(listaPorId(listaId)?.nome||'a lista'));
+}
+async function mudarQuadro(q){
+  // Mudar de quadro leva o card para a primeira lista do outro quadro
+  // (ex.: Fechado → Produção / A iniciar).
+  const primeira=LISTAS.find(l=>l.quadro===q);
+  const{data,error}=await sb.from('sv_lpjehh_clientes').update({quadro:q,lista_id:primeira?.id||null,posicao:0}).eq('id',CARD.id).select('*').limit(1);
+  if(falhou(error,'mudar de quadro'))return;
+  CARD=data[0];desenharCard();carregarChat();carregarChecklist();carregarAnexos();carregarAtividades();carregarEtiquetas();
+}
+async function togAgente(){
+  const novo=!CARD.agente_pausado;
+  const{error}=await sb.from('sv_lpjehh_clientes').update({agente_pausado:novo}).eq('id',CARD.id);
+  if(falhou(error,'mudar o agente'))return;
+  CARD.agente_pausado=novo;
+  await registrar(novo?'Agente pausado por '+U.nome+'.':'Agente retomado por '+U.nome+'.');
+  $('c-agente').textContent=novo?'▶ Retomar agente':'⏸ Pausar agente';
+}
+async function resolverEscalado(){
+  const{error}=await sb.from('sv_lpjehh_clientes').update({escalado_em:null}).eq('id',CARD.id);
+  if(falhou(error,'resolver'))return;
+  CARD.escalado_em=null;await registrar('Pedido de atendimento humano resolvido por '+U.nome+'.');
+  $('c-escalado').remove();
+}
+async function togArquivar(){
+  const arq=!CARD.arquivado_em;
+  if(arq&&!confirm('Arquivar tira o card do quadro. Continuar?'))return;
+  const{error}=await sb.from('sv_lpjehh_clientes').update({arquivado_em:arq?new Date().toISOString():null}).eq('id',CARD.id);
+  if(falhou(error,'arquivar'))return;
+  await registrar(arq?'Arquivado por '+U.nome+'.':'Desarquivado por '+U.nome+'.');
+  CARD.arquivado_em=arq?new Date().toISOString():null;
+  if(arq){clearInterval(POLL);CARD=null;$('modal').classList.add('h');pageQuadro(QUADRO_ATUAL);}
+  else desenharCard();
+}
+async function registrar(descricao){
+  await sb.from('sv_lpjehh_atividades').insert({cliente_id:CARD.id,usuario_id:U.id,tipo:'nota',descricao});
+  carregarAtividades();
+}
+
+// ---------- etiquetas ----------
+async function carregarEtiquetas(){
+  if(!CARD)return;
+  const[todas,minhas]=await Promise.all([
+    sb.from('sv_lpjehh_etiquetas').select('*').order('nome'),
+    sb.from('sv_lpjehh_clientes_etiquetas').select('etiqueta_id').eq('cliente_id',CARD.id)
+  ]);
+  if(!$('c-etq'))return;
+  const tem=new Set((minhas.data||[]).map(x=>x.etiqueta_id));
+  $('c-etq').innerHTML=(todas.data||[]).map(e=>
+    '<button class="tag" data-etq="'+e.id+'" style="border:1px solid '+(tem.has(e.id)?esc(e.cor):'var(--border)')+';'+(tem.has(e.id)?'background:'+esc(e.cor)+';color:#fff':'')+';margin:0 4px 4px 0;cursor:pointer">'+esc(e.nome)+'</button>').join('')+
+    '<button class="tag" id="etq-nova" style="border:1px dashed var(--border);cursor:pointer">+ etiqueta</button>';
+  $('c-etq').querySelectorAll('[data-etq]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.etq;
+    const r=tem.has(id)
+      ?await sb.from('sv_lpjehh_clientes_etiquetas').delete().eq('cliente_id',CARD.id).eq('etiqueta_id',id)
+      :await sb.from('sv_lpjehh_clientes_etiquetas').insert({cliente_id:CARD.id,etiqueta_id:id});
+    if(!falhou(r.error,'mudar etiqueta'))carregarEtiquetas();
+  });
+  $('etq-nova').onclick=async()=>{
+    const nome=prompt('Nome da etiqueta:');if(!nome||!nome.trim())return;
+    const{data,error}=await sb.from('sv_lpjehh_etiquetas').insert({nome:nome.trim()}).select('id').limit(1);
+    if(falhou(error,'criar etiqueta'))return;
+    await sb.from('sv_lpjehh_clientes_etiquetas').insert({cliente_id:CARD.id,etiqueta_id:data[0].id});
+    carregarEtiquetas();
+  };
+}
+
+// ---------- chat ----------
+let CHAT_ULTIMO='';
+async function carregarChat(){
+  if(!CARD)return;
+  const id=CARD.id;
+  const[m,a]=await Promise.all([
+    sb.from('sv_lpjehh_mensagens').select('id,direcao,autor_tipo,tipo,texto,midia_caminho,midia_nome,enviada_em,criado_em,status').eq('cliente_id',id).order('enviada_em',{ascending:false,nullsFirst:false}).limit(200),
+    // O que ainda está na fila aparece no fim da conversa, apagado, para
+    // quem atende saber que já tem mensagem saindo e não mandar outra.
+    sb.from('sv_lpjehh_automacoes').select('id,tipo_automacao,texto_montado,status,data_hora_agendada').eq('cliente_id',id).in('status',['agendado','enviando','aguardando_aprovacao','erro']).neq('tipo_automacao','aviso_socio').order('data_hora_agendada')
+  ]);
+  if(!CARD||CARD.id!==id||!$('c-chat'))return;
+  if(m.error){$('c-chat').innerHTML='<div class="emp">Erro ao carregar a conversa.</div>';return;}
+  const msgs=(m.data||[]).reverse();
+  const assinatura=msgs.map(x=>x.id).join()+'|'+(a.data||[]).map(x=>x.id+x.status).join();
+  if(assinatura===CHAT_ULTIMO)return; // nada mudou: não redesenha nem rola a tela
+  CHAT_ULTIMO=assinatura;
+  const el=$('c-chat');
+  const noFim=el.scrollHeight-el.scrollTop-el.clientHeight<60;
+  el.innerHTML=(msgs.length?msgs.map(bolha).join(''):'<div class="emp">Sem mensagens ainda.</div>')+
+    (a.data||[]).map(x=>'<div class="bl sai" style="opacity:.6;border:1px dashed var(--text3)">'+esc(String(x.texto_montado||'').replace(/ \/ /g,'\n'))+
+      '<span class="q">'+({agendado:'na fila',enviando:'enviando',aguardando_aprovacao:'aguardando aprovação',erro:'ERRO no envio'}[x.status]||x.status)+' · '+dataHora(x.data_hora_agendada)+'</span></div>').join('');
+  if(noFim)el.scrollTop=el.scrollHeight;
+  el.querySelectorAll('[data-midia]').forEach(b=>b.onclick=()=>abrirArquivo(b.dataset.midia));
+}
+function bolha(x){
+  const sai=x.direcao==='saida';
+  const quem={cliente:'',agente:'agente',humano:'humano',sistema:'sistema'}[x.autor_tipo]??'';
+  let corpo=x.texto?esc(x.texto):'';
+  if(x.midia_caminho)corpo+=(corpo?'\n':'')+'<button class="btn sm" data-midia="'+esc(x.midia_caminho)+'">📎 '+esc(x.midia_nome||x.tipo)+'</button>';
+  else if(!x.texto)corpo='<i>['+esc(x.tipo)+']</i>';
+  return '<div class="bl '+(sai?'sai':'ent')+(x.autor_tipo==='agente'?' agente':'')+'">'+corpo+
+    '<span class="q">'+(quem?quem+' · ':'')+dataHora(x.enviada_em||x.criado_em)+'</span></div>';
+}
+async function enviarMensagem(){
+  const t=$('c-msg').value.trim();
+  if(!t)return;
+  if(!CARD.telefone_chave){toast('Este card não tem WhatsApp cadastrado.');return;}
+  $('c-enviar').disabled=true;
+  // 'manual' entra na fila já aprovado: quem escreveu é humano.
+  // O motor entrega na próxima rodada.
+  const{error}=await sb.from('sv_lpjehh_automacoes').insert({
+    cliente_id:CARD.id,tipo_automacao:'manual',status:'agendado',aprovado:true,aprovado_por:U.id,aprovado_em:new Date().toISOString(),
+    data_hora_agendada:new Date().toISOString(),texto_montado:t,ordem:1
+  });
+  $('c-enviar').disabled=false;
+  if(falhou(error,'enviar'))return;
+  $('c-msg').value='';CHAT_ULTIMO='';carregarChat();
+  toast('Na fila. Sai em até 1 minuto.');
+}
+
+// ---------- checklist ----------
+async function carregarChecklist(){
+  if(!CARD)return;
+  const{data,error}=await sb.from('sv_lpjehh_checklist').select('*').eq('cliente_id',CARD.id).order('ordem').order('criado_em');
+  if(!$('c-chk')||error)return;
+  const feitos=(data||[]).filter(x=>x.feito).length;
+  const opcUsu=sel=>'<option value="">—</option>'+USUARIOS.map(u=>'<option value="'+u.id+'"'+(u.id===sel?' selected':'')+'>'+esc(u.nome)+'</option>').join('');
+  $('c-chk').innerHTML=(data&&data.length?'<div class="mini" style="margin-bottom:6px">'+feitos+' de '+data.length+' concluídos</div>':'<div class="mini">Nenhum item.</div>')+
+    (data||[]).map(x=>'<div class="chk'+(x.feito?' feito':'')+'" data-id="'+x.id+'">'+
+      '<input type="checkbox"'+(x.feito?' checked':'')+' data-a="feito"/>'+
+      '<span class="tx">'+esc(x.texto)+(x.feito_em?' <span class="mt">'+dataBR(x.feito_em)+'</span>':'')+'</span>'+
+      '<select data-a="resp" style="max-width:110px;border:1px solid var(--border);border-radius:6px;font-size:12px">'+opcUsu(x.responsavel_id)+'</select>'+
+      '<input type="date" data-a="prazo" value="'+esc(x.prazo||'')+'" style="border:1px solid var(--border);border-radius:6px;font-size:12px"/>'+
+      '<button class="btn sm" data-a="del" title="Remover">×</button></div>').join('');
+  $('c-chk').querySelectorAll('.chk').forEach(li=>{
+    const id=li.dataset.id;
+    li.querySelector('[data-a=feito]').onchange=async e=>{
+      const f=e.target.checked;
+      const r=await sb.from('sv_lpjehh_checklist').update({feito:f,feito_em:f?new Date().toISOString():null}).eq('id',id);
+      if(!falhou(r.error,'marcar item'))carregarChecklist();
+    };
+    li.querySelector('[data-a=resp]').onchange=async e=>{falhou((await sb.from('sv_lpjehh_checklist').update({responsavel_id:e.target.value||null}).eq('id',id)).error,'salvar responsável');};
+    li.querySelector('[data-a=prazo]').onchange=async e=>{falhou((await sb.from('sv_lpjehh_checklist').update({prazo:e.target.value||null}).eq('id',id)).error,'salvar prazo');};
+    li.querySelector('[data-a=del]').onclick=async()=>{if(!confirm('Remover este item?'))return;if(!falhou((await sb.from('sv_lpjehh_checklist').delete().eq('id',id)).error,'remover'))carregarChecklist();};
+  });
+}
+async function addChecklist(){
+  const t=$('c-chk-novo').value.trim();if(!t)return;
+  const n=$('c-chk').querySelectorAll('.chk').length;
+  const{error}=await sb.from('sv_lpjehh_checklist').insert({cliente_id:CARD.id,texto:t,ordem:n});
+  if(falhou(error,'adicionar item'))return;
+  $('c-chk-novo').value='';carregarChecklist();
+}
+
+// ---------- anexos ----------
+// Bucket privado: o arquivo só abre por URL assinada de 5 minutos,
+// gerada na hora do clique. Link copiado não vira acesso permanente.
+async function carregarAnexos(){
+  if(!CARD)return;
+  const{data}=await sb.from('sv_lpjehh_anexos').select('*').eq('cliente_id',CARD.id).order('criado_em',{ascending:false});
+  if(!$('c-anx'))return;
+  $('c-anx').innerHTML=(data&&data.length)?data.map(a=>'<div class="lin"><span style="flex:1;word-break:break-all">'+esc(a.nome_arquivo)+'</span><span class="mini">'+dataBR(a.criado_em)+'</span>'+
+    '<button class="btn sm" data-abrir="'+esc(a.caminho_storage)+'">Abrir</button></div>').join(''):'<div class="mini">Nenhum anexo.</div>';
+  $('c-anx').querySelectorAll('[data-abrir]').forEach(b=>b.onclick=()=>abrirArquivo(b.dataset.abrir));
+}
+async function abrirArquivo(caminho){
+  const{data,error}=await sb.storage.from(BUCKET).createSignedUrl(caminho,300);
+  if(falhou(error,'abrir o arquivo'))return;
+  window.open(data.signedUrl,'_blank','noopener');
+}
+async function enviarAnexo(e){
+  const f=e.target.files[0];if(!f)return;
+  if(f.size>20*1024*1024){toast('Arquivo maior que 20 MB.');return;}
+  const caminho='anexos/'+CARD.id+'/'+Date.now()+'_'+f.name.replace(/[^\w.\-]/g,'_');
+  toast('Enviando…',10000);
+  const up=await sb.storage.from(BUCKET).upload(caminho,f,{contentType:f.type||'application/octet-stream'});
+  if(falhou(up.error,'enviar o arquivo'))return;
+  const{error}=await sb.from('sv_lpjehh_anexos').insert({cliente_id:CARD.id,usuario_id:U.id,nome_arquivo:f.name,caminho_storage:caminho,tamanho_bytes:f.size});
+  if(falhou(error,'registrar o anexo'))return;
+  toast('Anexo enviado.');carregarAnexos();
+}
+
+// ---------- histórico ----------
+async function carregarAtividades(){
+  if(!CARD)return;
+  const{data}=await sb.from('sv_lpjehh_atividades').select('descricao,criado_em,tipo').eq('cliente_id',CARD.id).order('criado_em',{ascending:false}).limit(50);
+  if(!$('c-ativ'))return;
+  $('c-ativ').innerHTML=(data&&data.length)?data.map(a=>'<div class="lin"><span class="mini" style="white-space:nowrap">'+dataHora(a.criado_em)+'</span><span>'+esc(a.descricao)+'</span></div>').join(''):'<div class="mini">Sem registros.</div>';
+}
+
+// ============================================================
+// CAIXA DE ENTRADA
+// Conversas cuja ÚLTIMA mensagem é do cliente: alguém está esperando.
+// Calculado no navegador sobre as 500 mensagens mais recentes. Quando o
+// volume crescer, isto vira uma view no banco (como a vw_inbox_lista da
+// Prev); com poucas conversas por dia, a view seria peso à toa.
+// ============================================================
+async function ultimasPorCliente(){
+  const{data,error}=await sb.from('sv_lpjehh_mensagens').select('cliente_id,direcao,texto,tipo,enviada_em,criado_em').not('cliente_id','is',null).order('enviada_em',{ascending:false,nullsFirst:false}).limit(500);
+  if(error)return null;
+  const mapa=new Map();
+  (data||[]).forEach(m=>{if(!mapa.has(m.cliente_id))mapa.set(m.cliente_id,m);});
+  return mapa;
+}
+async function contarEsperando(){
+  const mapa=await ultimasPorCliente();
+  if(!mapa)return 0;
+  return [...mapa.values()].filter(m=>m.direcao==='entrada').length;
+}
+async function pageInbox(){
+  marcarNav('inbox');
+  $('pc').innerHTML='<div class="cab"><h2>Caixa de entrada</h2></div><div class="abas"><button class="on" data-f="esperando">Esperando resposta</button><button data-f="todas">Todas</button></div><div id="ib" class="tb"><div class="emp">Carregando…</div></div>';
+  let filtro='esperando';
+  document.querySelectorAll('.abas button').forEach(b=>b.onclick=()=>{filtro=b.dataset.f;document.querySelectorAll('.abas button').forEach(x=>x.classList.toggle('on',x===b));desenhar();});
+  const mapa=await ultimasPorCliente();
+  if(!mapa){$('ib').innerHTML='<div class="emp">Erro ao carregar.</div>';return;}
+  const ids=[...mapa.keys()];
+  const{data:cli}=ids.length?await sb.from('sv_lpjehh_clientes').select('id,nome,empresa,agente_pausado,escalado_em').in('id',ids.slice(0,300)):{data:[]};
+  const porId=new Map((cli||[]).map(c=>[c.id,c]));
+  function desenhar(){
+    const itens=[...mapa.entries()].filter(([,m])=>filtro==='todas'||m.direcao==='entrada').filter(([id])=>porId.has(id));
+    $('ib').innerHTML=itens.length?itens.map(([id,m])=>{
+      const c=porId.get(id);
+      return '<div class="tr click" data-id="'+id+'"><div class="grow"><b>'+esc(c.nome||'Sem nome')+'</b>'+(c.empresa?' <span class="mini">· '+esc(c.empresa)+'</span>':'')+
+        (c.escalado_em?' <span class="tag mal">pediu humano</span>':'')+(c.agente_pausado?' <span class="tag pausa">agente pausado</span>':'')+
+        '<div class="prev">'+(m.direcao==='saida'?'Você: ':'')+esc(m.texto||'['+m.tipo+']')+'</div></div><span class="mini">'+haQuanto(m.enviada_em||m.criado_em)+'</span></div>';
+    }).join(''):'<div class="emp">Ninguém esperando resposta.</div>';
+    $('ib').querySelectorAll('[data-id]').forEach(el=>el.onclick=()=>abrirCard(el.dataset.id));
+  }
+  desenhar();
+}
+
+// ============================================================
+// FILA (sv_lpjehh_automacoes)
+// Aprovar aqui grava os mesmos campos que o "N sim" no WhatsApp.
+// ============================================================
+const ABAS_FILA={
+  aprovar:{rot:'Aprovar',status:['aguardando_aprovacao']},
+  agendadas:{rot:'Agendadas',status:['agendado','enviando']},
+  erro:{rot:'Com erro',status:['erro']},
+  enviadas:{rot:'Enviadas',status:['enviado']}
+};
+async function pageFila(aba='aprovar'){
+  marcarNav('fila');
+  $('pc').innerHTML='<div class="cab"><h2>Fila</h2></div><div class="abas">'+Object.entries(ABAS_FILA).map(([k,v])=>'<button data-a="'+k+'"'+(k===aba?' class="on"':'')+'>'+v.rot+'</button>').join('')+'</div><div id="fl" class="tb"><div class="emp">Carregando…</div></div>';
+  document.querySelectorAll('.abas button').forEach(b=>b.onclick=()=>pageFila(b.dataset.a));
+  const q=sb.from('sv_lpjehh_automacoes').select('id,numero,cliente_id,tipo_automacao,texto_montado,status,data_hora_agendada,enviado_em,erro,sv_lpjehh_clientes(nome)').in('status',ABAS_FILA[aba].status).neq('tipo_automacao','aviso_socio');
+  const{data,error}=await (aba==='enviadas'?q.order('enviado_em',{ascending:false}).limit(100):q.order('data_hora_agendada').limit(300));
+  if(error){$('fl').innerHTML='<div class="emp">Erro ao carregar.</div>';return;}
+  $('fl').innerHTML=(data&&data.length)?data.map(x=>'<div class="tr"><div class="grow"><b class="click" data-card="'+x.cliente_id+'" style="cursor:pointer">'+esc(x.sv_lpjehh_clientes?.nome||'—')+'</b> <span class="mini">#'+x.numero+' · '+esc(x.tipo_automacao)+' · '+dataHora(x.enviado_em||x.data_hora_agendada)+'</span>'+
+      '<div style="white-space:pre-wrap;margin-top:4px">'+esc(String(x.texto_montado||'').replace(/ \/ /g,'\n'))+'</div>'+
+      (x.erro?'<div class="erro">'+esc(x.erro)+'</div>':'')+'</div>'+
+      (aba==='aprovar'?'<div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm pri" data-ok="'+x.id+'">Aprovar</button><button class="btn sm red" data-no="'+x.id+'">Cancelar</button></div>':'')+
+      (aba==='agendadas'||aba==='erro'?'<button class="btn sm red" data-no="'+x.id+'">Cancelar</button>':'')+
+    '</div>').join(''):'<div class="emp">Nada aqui.</div>';
+  $('fl').querySelectorAll('[data-card]').forEach(b=>b.onclick=()=>abrirCard(b.dataset.card));
+  $('fl').querySelectorAll('[data-ok]').forEach(b=>b.onclick=async()=>{
+    const agora=new Date().toISOString();
+    // .eq status: se o sócio já aprovou pelo WhatsApp, não reaprova.
+    const r=await sb.from('sv_lpjehh_automacoes').update({status:'agendado',aprovado:true,aprovado_por:U.id,aprovado_em:agora,data_hora_agendada:agora}).eq('id',b.dataset.ok).eq('status','aguardando_aprovacao');
+    if(!falhou(r.error,'aprovar')){toast('Aprovado.');pageFila(aba);atualizarBadges();}
+  });
+  $('fl').querySelectorAll('[data-no]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Cancelar este envio?'))return;
+    const r=await sb.from('sv_lpjehh_automacoes').update({status:'cancelado',motivo_cancelamento:'Cancelado por '+U.nome+' no CRM'}).eq('id',b.dataset.no).in('status',['aguardando_aprovacao','agendado','erro']);
+    if(!falhou(r.error,'cancelar')){toast('Cancelado.');pageFila(aba);atualizarBadges();}
+  });
+}
+
+// ============================================================
+// CONFIGURAÇÃO (só sócio — a RLS também barra a escrita de vendedor)
+// Tudo o que o motor lê de sv_lpjehh_variaveis: trocar texto, prompt,
+// número ou preço mínimo é salvar aqui, sem deploy.
+// ============================================================
+async function pageConfig(){
+  marcarNav('config');
+  const{data,error}=await sb.from('sv_lpjehh_variaveis').select('*').order('chave');
+  if(falhou(error,'carregar configuração'))return;
+  $('pc').innerHTML='<div class="cab"><h2>Configuração</h2></div>'+
+    '<div class="sec" style="max-width:860px"><p class="mini" style="margin-bottom:12px">Mudanças valem para o motor em até 5 minutos. Segredos (chaves de API, certificado) não ficam aqui.</p>'+
+    (data||[]).map(v=>{
+      const longo=v.chave==='agente_prompt'||v.chave==='abertura_variantes';
+      const val=v.tipo==='numero'?(v.valor_numero??''):(v.valor_texto??'');
+      return '<div class="f"><label>'+esc(v.rotulo||v.chave)+' <span class="mini">('+esc(v.chave)+')</span></label>'+
+        (longo?'<textarea data-k="'+esc(v.chave)+'" data-t="'+esc(v.tipo)+'" style="min-height:'+(v.chave==='agente_prompt'?'360':'140')+'px;font-family:ui-monospace,monospace;font-size:12px">'+esc(val)+'</textarea>'
+              :'<input data-k="'+esc(v.chave)+'" data-t="'+esc(v.tipo)+'" value="'+esc(val)+'"/>')+
+        (v.descricao?'<div class="mini">'+esc(v.descricao)+'</div>':'')+'</div>';
+    }).join('')+
+    '<button class="btn pri" id="cfg-salvar">Salvar tudo</button></div>';
+  $('cfg-salvar').onclick=async()=>{
+    const campos=[...document.querySelectorAll('[data-k]')];
+    const mudados=campos.filter(el=>{
+      const v=(data||[]).find(x=>x.chave===el.dataset.k);
+      const orig=el.dataset.t==='numero'?String(v.valor_numero??''):(v.valor_texto??'');
+      return el.value!==orig;
+    });
+    if(!mudados.length){toast('Nada mudou.');return;}
+    // motor_ligado é o interruptor geral: ligar sem prompt faria o agente
+    // responder clientes sem instrução nenhuma.
+    const lig=mudados.find(el=>el.dataset.k==='motor_ligado');
+    if(lig&&lig.value.trim().toLowerCase()==='sim'){
+      const pr=document.querySelector('[data-k=agente_prompt]');
+      if(!pr||!pr.value.trim()){toast('Preencha o prompt do agente antes de ligar o motor.',5000);return;}
+      if(!confirm('Ligar o motor faz o agente começar a responder clientes de verdade. Confirmar?'))return;
+    }
+    for(const el of mudados){
+      const up=el.dataset.t==='numero'?{valor_numero:numOuNull(el.value),atualizado_em:new Date().toISOString()}:{valor_texto:el.value.trim()===''?null:el.value,atualizado_em:new Date().toISOString()};
+      const r=await sb.from('sv_lpjehh_variaveis').update(up).eq('chave',el.dataset.k);
+      if(falhou(r.error,'salvar '+el.dataset.k))return;
+    }
+    toast(mudados.length+' configuração(ões) salva(s).');pageConfig();
+  };
+}
+
+sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'){U=null;mostrarLogin();}});
+iniciar();
+</script>
+</body>
+</html>
