@@ -19,6 +19,10 @@
   blocos que se aplicam: login, kanban com arrastar, cartão, chat,
   checklist, inbox, fila e configuração.
 
+  30/10/2026: Caixa de entrada em três colunas, no molde da Prev
+  (lista com busca, conversa com resposta, painel do cliente). Lê a view
+  sv_lpjehh_vw_inbox (SQL 09 do previmater-ops).
+
   TABELAS: só sv_lpjehh_*. Nunca crm_*.
 
   O CRM NÃO ENVIA WHATSAPP. Mensagem escrita aqui vira uma linha
@@ -161,6 +165,37 @@ input,select,textarea{font:inherit;color:inherit}
 .abas{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
 .abas button{border:1px solid var(--border);background:var(--white);border-radius:99px;padding:6px 12px;font-weight:600;font-size:13px}
 .abas button.on{background:var(--text);color:#fff;border-color:var(--text)}
+/* ---------- caixa de entrada ---------- */
+.ib{display:grid;grid-template-columns:320px 1fr 280px;gap:0;background:var(--white);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;height:calc(100vh - 110px);min-height:420px}
+.ib-l{border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.ib-bus{padding:10px;border-bottom:1px solid var(--border)}
+.ib-bus input{width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px}
+.ib-bus .abas{margin-bottom:0}
+.ib-itens{flex:1;overflow-y:auto}
+.ib-it{padding:10px 12px;border-bottom:1px solid var(--border2);cursor:pointer}
+.ib-it:hover{background:var(--bg)}
+.ib-it.on{background:var(--brand-l)}
+.ib-it.esp b::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);margin-right:6px;vertical-align:middle}
+.ib-top{display:flex;justify-content:space-between;gap:8px}
+.ib-it .prev{color:var(--text2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:2px 0 4px}
+.ib-tags{display:flex;gap:4px;flex-wrap:wrap}
+.ib-c{display:flex;flex-direction:column;min-height:0;min-width:0}
+.ib-ch{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.ib-ch .grow{flex:1;min-width:0}
+.ib-volta{display:none}
+.ib-p{border-left:1px solid var(--border);overflow-y:auto;padding:12px;background:var(--bg)}
+.ib-p .kv{grid-template-columns:80px 1fr}
+.ib-img{max-width:240px;max-height:240px;border-radius:8px;display:block;cursor:pointer;background:var(--border2);min-height:60px}
+@media(max-width:900px){
+  .ib{grid-template-columns:1fr;height:calc(100vh - 120px)}
+  .ib-c,.ib-p{display:none}
+  .ib.com-conversa .ib-l{display:none}
+  .ib.com-conversa .ib-c{display:flex}
+  .ib.com-conversa.com-painel .ib-c{display:none}
+  .ib.com-conversa.com-painel .ib-p{display:block}
+  .ib-volta{display:inline-block}
+}
+@media(min-width:901px){#ib-ver-p{display:none}}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#0F172A;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;font-size:13px;max-width:90%}
 </style>
 </head>
@@ -319,6 +354,7 @@ async function carregarBase(){
 function marcarNav(n){document.querySelectorAll('#side a').forEach(a=>a.classList.toggle('on',a.dataset.nav===n));$('side').classList.remove('aberto');}
 function route(){
   if(!U)return;
+  pararInbox(); // a Caixa de entrada atualiza sozinha; fora dela, para
   const r=(location.hash.slice(1)||'/').split('?')[0];
   if(r==='/'){location.hash='#/quadro/comercial';return;}
   let m;
@@ -767,45 +803,194 @@ async function carregarAtividades(){
 }
 
 // ============================================================
-// CAIXA DE ENTRADA
-// Conversas cuja ÚLTIMA mensagem é do cliente: alguém está esperando.
-// Calculado no navegador sobre as 500 mensagens mais recentes. Quando o
-// volume crescer, isto vira uma view no banco (como a vw_inbox_lista da
-// Prev); com poucas conversas por dia, a view seria peso à toa.
+// CAIXA DE ENTRADA — 30/10/2026, no molde da Prev
+// Três colunas: conversas (com busca), a conversa aberta com resposta,
+// e o painel do cliente. Atualiza sozinha: lista a cada 20 s, conversa
+// aberta a cada 8 s.
+//
+// A LISTA VEM DA VIEW sv_lpjehh_vw_inbox (SQL 09), uma linha por
+// conversa com prévia de 200 caracteres. A versão anterior puxava as 500
+// últimas mensagens e agrupava aqui; na Prev esse desenho chegou a 12 MB
+// por carga e estourou a cota de banda.
+//
+// RESPONDER usa o MESMO caminho do chat do cartão: linha "manual" na
+// fila, aprovada, que o motor entrega no próximo minuto. Não existe um
+// segundo jeito de mandar mensagem.
+//
+// No celular (< 900 px) é uma coluna por vez: lista → conversa → painel,
+// com botão de voltar.
 // ============================================================
-async function ultimasPorCliente(){
-  const{data,error}=await sb.from('sv_lpjehh_mensagens').select('cliente_id,direcao,texto,tipo,enviada_em,criado_em').not('cliente_id','is',null).order('enviada_em',{ascending:false,nullsFirst:false}).limit(500);
+let IB={lista:[],sel:null,filtro:'esperando',busca:'',tLista:null,tChat:null,assinatura:'',urls:new Map()};
+function pararInbox(){clearInterval(IB.tLista);clearInterval(IB.tChat);IB.tLista=IB.tChat=null;}
+async function carregarInboxLista(){
+  const{data,error}=await sb.from('sv_lpjehh_vw_inbox').select('*').order('quando',{ascending:false}).limit(300);
   if(error)return null;
-  const mapa=new Map();
-  (data||[]).forEach(m=>{if(!mapa.has(m.cliente_id))mapa.set(m.cliente_id,m);});
-  return mapa;
+  return data||[];
 }
 async function contarEsperando(){
-  const mapa=await ultimasPorCliente();
-  if(!mapa)return 0;
-  return [...mapa.values()].filter(m=>m.direcao==='entrada').length;
+  const{count}=await sb.from('sv_lpjehh_vw_inbox').select('cliente_id',{count:'exact',head:true}).eq('direcao','entrada');
+  return count||0;
+}
+function prevTexto(c){
+  const midia={imagem:'📷 Imagem',audio:'🎤 Áudio',video:'🎬 Vídeo',documento:'📎 Arquivo',figurinha:'Figurinha'}[c.tipo];
+  const t=c.previa||midia||'['+(c.tipo||'mensagem')+']';
+  const quem=c.direcao==='saida'?(c.autor_tipo==='agente'?'Vanessa: ':'Você: '):'';
+  return quem+t;
 }
 async function pageInbox(){
-  marcarNav('inbox');
-  $('pc').innerHTML='<div class="cab"><h2>Caixa de entrada</h2></div><div class="abas"><button class="on" data-f="esperando">Esperando resposta</button><button data-f="todas">Todas</button></div><div id="ib" class="tb"><div class="emp">Carregando…</div></div>';
-  let filtro='esperando';
-  document.querySelectorAll('.abas button').forEach(b=>b.onclick=()=>{filtro=b.dataset.f;document.querySelectorAll('.abas button').forEach(x=>x.classList.toggle('on',x===b));desenhar();});
-  const mapa=await ultimasPorCliente();
-  if(!mapa){$('ib').innerHTML='<div class="emp">Erro ao carregar.</div>';return;}
-  const ids=[...mapa.keys()];
-  const{data:cli}=ids.length?await sb.from('sv_lpjehh_clientes').select('id,nome,empresa,agente_pausado,escalado_em').in('id',ids.slice(0,300)):{data:[]};
-  const porId=new Map((cli||[]).map(c=>[c.id,c]));
-  function desenhar(){
-    const itens=[...mapa.entries()].filter(([,m])=>filtro==='todas'||m.direcao==='entrada').filter(([id])=>porId.has(id));
-    $('ib').innerHTML=itens.length?itens.map(([id,m])=>{
-      const c=porId.get(id);
-      return '<div class="tr click" data-id="'+id+'"><div class="grow"><b>'+esc(c.nome||'Sem nome')+'</b>'+(c.empresa?' <span class="mini">· '+esc(c.empresa)+'</span>':'')+
-        (c.escalado_em?' <span class="tag mal">pediu humano</span>':'')+(c.agente_pausado?' <span class="tag pausa">agente pausado</span>':'')+
-        '<div class="prev">'+(m.direcao==='saida'?'Você: ':'')+esc(m.texto||'['+m.tipo+']')+'</div></div><span class="mini">'+haQuanto(m.enviada_em||m.criado_em)+'</span></div>';
-    }).join(''):'<div class="emp">Ninguém esperando resposta.</div>';
-    $('ib').querySelectorAll('[data-id]').forEach(el=>el.onclick=()=>abrirCard(el.dataset.id));
+  marcarNav('inbox');pararInbox();
+  IB.sel=null;IB.assinatura='';
+  $('pc').innerHTML=
+    '<div class="cab"><h2>Caixa de entrada</h2></div>'+
+    '<div class="ib" id="ib">'+
+      '<div class="ib-l"><div class="ib-bus"><input id="ib-busca" placeholder="Buscar por nome, empresa ou final do telefone"/>'+
+        '<div class="abas"><button data-f="esperando" class="on">Esperando</button><button data-f="todas">Todas</button></div></div>'+
+        '<div id="ib-itens" class="ib-itens"><div class="emp">Carregando…</div></div></div>'+
+      '<div class="ib-c" id="ib-c"><div class="emp" style="margin:auto">Selecione uma conversa</div></div>'+
+      '<div class="ib-p" id="ib-p"></div>'+
+    '</div>';
+  $('ib-busca').oninput=e=>{IB.busca=e.target.value;desenharInboxLista();};
+  document.querySelectorAll('#ib .abas button').forEach(b=>b.onclick=()=>{IB.filtro=b.dataset.f;document.querySelectorAll('#ib .abas button').forEach(x=>x.classList.toggle('on',x===b));desenharInboxLista();});
+  await atualizarInboxLista();
+  IB.tLista=setInterval(atualizarInboxLista,20000);
+}
+async function atualizarInboxLista(){
+  if(!$('ib-itens'))return pararInbox();
+  const l=await carregarInboxLista();
+  if(!l){if(!IB.lista.length)$('ib-itens').innerHTML='<div class="emp">Erro ao carregar.</div>';return;}
+  IB.lista=l;desenharInboxLista();
+}
+function desenharInboxLista(){
+  const el=$('ib-itens');if(!el)return;
+  const q=IB.busca.trim().toLowerCase();
+  const itens=IB.lista.filter(c=>IB.filtro==='todas'||c.direcao==='entrada').filter(c=>!q||[c.nome,c.empresa,c.fone_final].some(v=>String(v||'').toLowerCase().includes(q)));
+  el.innerHTML=itens.length?itens.map(c=>{
+    const l=listaPorId(c.lista_id);
+    return '<div class="ib-it'+(c.cliente_id===IB.sel?' on':'')+(c.direcao==='entrada'?' esp':'')+'" data-id="'+c.cliente_id+'">'+
+      '<div class="ib-top"><b>'+esc(c.nome||'Sem nome')+'</b><span class="mini">'+haQuanto(c.quando)+'</span></div>'+
+      '<div class="prev">'+esc(prevTexto(c))+'</div>'+
+      '<div class="ib-tags">'+(l?'<span class="tag">'+esc(l.nome)+'</span>':'')+(c.produto?'<span class="tag prod">'+esc(PRODUTOS[c.produto]||c.produto)+'</span>':'')+
+        (c.escalado_em?'<span class="tag mal">pediu humano</span>':'')+(c.agente_pausado?'<span class="tag pausa">Vanessa pausada</span>':'')+'</div></div>';
+  }).join(''):'<div class="emp">'+(IB.filtro==='esperando'?'Ninguém esperando resposta.':'Nenhuma conversa.')+'</div>';
+  el.querySelectorAll('[data-id]').forEach(d=>d.onclick=()=>abrirConversa(d.dataset.id));
+}
+async function abrirConversa(id){
+  IB.sel=id;IB.assinatura='';
+  desenharInboxLista();
+  $('ib').classList.add('com-conversa');
+  $('ib-c').innerHTML=
+    '<div class="ib-ch"><button class="btn sm ib-volta" id="ib-volta">←</button><div class="grow" id="ib-nome"><b>…</b></div><button class="btn sm" id="ib-ver-p">Painel</button></div>'+
+    '<div class="chat" id="ib-chat"><div class="emp">Carregando…</div></div>'+
+    '<div class="chat-in"><textarea id="ib-msg" placeholder="Responder (sai pelo WhatsApp em até 1 minuto)"></textarea><button class="btn pri" id="ib-env">Enviar</button></div>';
+  $('ib-volta').onclick=()=>{$('ib').classList.remove('com-conversa','com-painel');IB.sel=null;clearInterval(IB.tChat);desenharInboxLista();};
+  $('ib-ver-p').onclick=()=>$('ib').classList.toggle('com-painel');
+  $('ib-env').onclick=()=>enviarInbox();
+  $('ib-msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))enviarInbox();});
+  await desenharPainelInbox();
+  await carregarConversaInbox(true);
+  clearInterval(IB.tChat);IB.tChat=setInterval(()=>carregarConversaInbox(false),8000);
+}
+async function carregarConversaInbox(rolar){
+  const id=IB.sel;if(!id||!$('ib-chat'))return clearInterval(IB.tChat);
+  const[m,a]=await Promise.all([
+    sb.from('sv_lpjehh_mensagens').select('id,direcao,autor_tipo,tipo,texto,midia_caminho,midia_nome,midia_mime,midia_transcricao,midia_tipo_doc,enviada_em,criado_em').eq('cliente_id',id).order('enviada_em',{ascending:false,nullsFirst:false}).limit(150),
+    sb.from('sv_lpjehh_automacoes').select('id,tipo_automacao,texto_montado,status,data_hora_agendada').eq('cliente_id',id).in('status',['agendado','enviando','aguardando_aprovacao','erro']).not('tipo_automacao','in','(aviso_socio,contrato_conferir)').order('data_hora_agendada')
+  ]);
+  if(IB.sel!==id||!$('ib-chat'))return;
+  if(m.error){$('ib-chat').innerHTML='<div class="emp">Erro ao carregar a conversa.</div>';return;}
+  const msgs=(m.data||[]).reverse();
+  const assinatura=msgs.map(x=>x.id).join()+'|'+(a.data||[]).map(x=>x.id+x.status).join();
+  if(assinatura===IB.assinatura)return; // nada mudou: não redesenha nem pula a rolagem
+  IB.assinatura=assinatura;
+  const el=$('ib-chat');
+  const noFim=rolar||el.scrollHeight-el.scrollTop-el.clientHeight<60;
+  el.innerHTML=(msgs.length?msgs.map(bolhaInbox).join(''):'<div class="emp">Sem mensagens ainda.</div>')+
+    (a.data||[]).map(x=>'<div class="bl sai" style="opacity:.6;border:1px dashed var(--text3)">'+esc(String(x.texto_montado||'').replace(/ \/ /g,'\n'))+
+      '<span class="q">'+({agendado:'na fila',enviando:'enviando',aguardando_aprovacao:'aguardando aprovação',erro:'ERRO no envio'}[x.status]||x.status)+' · '+dataHora(x.data_hora_agendada)+'</span></div>').join('');
+  el.querySelectorAll('[data-midia]').forEach(b=>b.onclick=()=>abrirArquivo(b.dataset.midia));
+  await mostrarImagensInbox(el);
+  if(noFim)el.scrollTop=el.scrollHeight;
+}
+/* Mesma bolha do cartão, com duas diferenças: imagem aparece na conversa
+   (URL assinada de 1 h, guardada para não pedir de novo a cada 8 s) e
+   áudio transcrito mostra o texto. Documento de identidade NÃO é aberto
+   na conversa: aparece só o rótulo, e abre com um clique, como no cartão. */
+function bolhaInbox(x){
+  const sai=x.direcao==='saida';
+  const quem={cliente:'',agente:'Vanessa',humano:'humano',sistema:'sistema'}[x.autor_tipo]??'';
+  let corpo='';
+  const ehDoc=['rg','cnh','cin'].includes(x.midia_tipo_doc);
+  if(x.midia_caminho&&x.tipo==='imagem'&&!ehDoc)corpo+='<img class="ib-img" data-img="'+esc(x.midia_caminho)+'" data-midia="'+esc(x.midia_caminho)+'" alt="imagem"/>';
+  else if(x.midia_caminho)corpo+='<button class="btn sm" data-midia="'+esc(x.midia_caminho)+'">📎 '+esc(ehDoc?'Documento de identidade':(x.midia_nome||x.tipo))+'</button>';
+  if(x.tipo==='audio'&&x.midia_transcricao)corpo+=(corpo?'\n':'')+'<i>🎤 '+esc(x.midia_transcricao)+'</i>';
+  if(x.texto)corpo+=(corpo?'\n':'')+esc(x.texto);
+  if(!corpo)corpo='<i>['+esc(x.tipo)+']</i>';
+  return '<div class="bl '+(sai?'sai':'ent')+(x.autor_tipo==='agente'?' agente':'')+'">'+corpo+
+    '<span class="q">'+(quem?quem+' · ':'')+dataHora(x.enviada_em||x.criado_em)+'</span></div>';
+}
+async function mostrarImagensInbox(el){
+  const faltam=[...new Set([...el.querySelectorAll('img[data-img]')].map(i=>i.dataset.img).filter(p=>!IB.urls.has(p)))];
+  if(faltam.length){
+    const{data}=await sb.storage.from(BUCKET).createSignedUrls(faltam,3600);
+    (data||[]).forEach(d=>{if(d.signedUrl)IB.urls.set(d.path,d.signedUrl);});
   }
-  desenhar();
+  el.querySelectorAll('img[data-img]').forEach(i=>{const u=IB.urls.get(i.dataset.img);if(u)i.src=u;});
+}
+async function desenharPainelInbox(){
+  const id=IB.sel;
+  const{data,error}=await sb.from('sv_lpjehh_clientes').select('id,nome,empresa,telefone_chave,produto,valor_proposta,valor_fechado,lista_id,agente_pausado,escalado_em,agente_dados,proposta_enviada_em,fechado_em,material_completo_em').eq('id',id).limit(1);
+  if(IB.sel!==id)return;
+  if(error||!data?.length){$('ib-p').innerHTML='<div class="emp">Card não encontrado.</div>';return;}
+  const c=data[0],d=c.agente_dados||{},l=listaPorId(c.lista_id);
+  $('ib-nome').innerHTML='<b>'+esc(c.nome||'Sem nome')+'</b>'+(c.empresa?' <span class="mini">· '+esc(c.empresa)+'</span>':'');
+  const linha=(k,v)=>v?'<b>'+k+'</b><span>'+esc(v)+'</span>':'';
+  $('ib-p').innerHTML=
+    '<button class="btn sm ib-volta" id="ib-volta-p" style="margin-bottom:10px">← Conversa</button>'+
+    '<div class="sec"><h4>'+esc(c.nome||'Sem nome')+'</h4><div class="kv">'+
+      linha('Etapa',l?(l.quadro==='producao'?'Produção · ':'')+l.nome:'')+
+      linha('Produto',PRODUTOS[c.produto||d.produto]||'')+
+      linha('Proposta',dinheiro(c.valor_proposta))+
+      linha('Fechado',dinheiro(c.valor_fechado))+
+      linha('Negócio',d.negocio)+linha('Objetivo',d.objetivo)+
+      linha('WhatsApp',c.telefone_chave?'final '+String(c.telefone_chave).slice(-4):'')+
+    '</div></div>'+
+    (c.escalado_em?'<div class="sec" style="border-color:#FECACA"><b style="color:var(--red)">Pediu atendimento humano</b><div class="mini">'+dataHora(c.escalado_em)+'</div><button class="btn sm" id="ib-resolver" style="margin-top:8px">Marcar como resolvido</button></div>':'')+
+    '<div class="sec"><button class="btn" id="ib-agente" style="width:100%;margin-bottom:8px">'+(c.agente_pausado?'▶ Retomar Vanessa':'⏸ Pausar Vanessa')+'</button>'+
+      '<button class="btn pri" id="ib-card" style="width:100%">Abrir card completo</button></div>';
+  $('ib-card').onclick=()=>abrirCard(c.id);
+  $('ib-volta-p').onclick=()=>$('ib').classList.remove('com-painel');
+  $('ib-agente').onclick=async()=>{
+    const novo=!c.agente_pausado;
+    // Pausar também tira da fila a fala da Vanessa que ainda não saiu:
+    // senão uma resposta já pronta sairia minutos depois de você assumir
+    // (lição da Prev, 02/09). Mensagem manual e aviso ficam.
+    const{error}=await sb.from('sv_lpjehh_clientes').update({agente_pausado:novo}).eq('id',c.id);
+    if(falhou(error,'mudar a Vanessa'))return;
+    if(novo)await sb.from('sv_lpjehh_automacoes').update({status:'cancelado',motivo_cancelamento:'Vanessa pausada na Caixa de entrada'}).eq('cliente_id',c.id).in('status',['agendado','aguardando_aprovacao']).in('tipo_automacao',['agente','abertura','sequencia']);
+    await sb.from('sv_lpjehh_atividades').insert({cliente_id:c.id,usuario_id:U.id,tipo:'nota',descricao:(novo?'Vanessa pausada':'Vanessa retomada')+' por '+U.nome+' (Caixa de entrada).'});
+    toast(novo?'Vanessa pausada nesta conversa.':'Vanessa retomada.');
+    desenharPainelInbox();atualizarInboxLista();IB.assinatura='';carregarConversaInbox(false);
+  };
+  if($('ib-resolver'))$('ib-resolver').onclick=async()=>{
+    const{error}=await sb.from('sv_lpjehh_clientes').update({escalado_em:null}).eq('id',c.id);
+    if(falhou(error,'resolver'))return;
+    await sb.from('sv_lpjehh_atividades').insert({cliente_id:c.id,usuario_id:U.id,tipo:'nota',descricao:'Pedido de atendimento humano resolvido por '+U.nome+'.'});
+    desenharPainelInbox();atualizarInboxLista();
+  };
+}
+async function enviarInbox(){
+  const t=$('ib-msg').value.trim();
+  if(!t||!IB.sel)return;
+  $('ib-env').disabled=true;
+  // Mesmo insert do chat do cartão: 'manual' já aprovada; o motor entrega.
+  const{error}=await sb.from('sv_lpjehh_automacoes').insert({
+    cliente_id:IB.sel,tipo_automacao:'manual',status:'agendado',aprovado:true,aprovado_por:U.id,aprovado_em:new Date().toISOString(),
+    data_hora_agendada:new Date().toISOString(),texto_montado:t,ordem:1
+  });
+  $('ib-env').disabled=false;
+  if(falhou(error,'enviar'))return;
+  $('ib-msg').value='';IB.assinatura='';carregarConversaInbox(true);
+  toast('Na fila. Sai em até 1 minuto.');
 }
 
 // ============================================================
