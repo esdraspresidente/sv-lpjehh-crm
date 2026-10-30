@@ -62,6 +62,13 @@ input,select,textarea{font:inherit;color:inherit}
 .btn{border:1px solid var(--border);background:var(--white);border-radius:8px;padding:8px 14px;font-weight:600}
 .btn:hover{background:var(--bg)}
 .btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+/* Interruptor sim/não da Configuração */
+.sw{display:inline-flex;align-items:center;gap:10px;border:0;background:none;padding:4px 0;font-weight:600;cursor:pointer}
+.sw .tr{width:44px;height:24px;border-radius:12px;background:var(--text3);position:relative;transition:background .15s}
+.sw .tr::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+.sw.on .tr{background:var(--green)}
+.sw.on .tr::after{left:23px}
+.sw:disabled{opacity:.5;cursor:wait}
 .btn.pri:hover{background:var(--brand-d)}
 .btn.red{color:var(--red);border-color:#FECACA}
 .btn.sm{padding:5px 10px;font-size:12px}
@@ -843,6 +850,14 @@ async function pageFila(aba='aprovar'){
 // Tudo o que o motor lê de sv_lpjehh_variaveis: trocar texto, prompt,
 // número ou preço mínimo é salvar aqui, sem deploy.
 // ============================================================
+// Sim/não = variável de texto cujo valor salvo é "sim" ou "nao" (ou
+// vazio, num nome *_ligado/*_ligada). Detectado pelo valor para que
+// interruptor novo apareça como botão sem mexer aqui.
+function ehSimNao(v){
+  if(v.tipo==='numero')return false;
+  const t=String(v.valor_texto??'').trim().toLowerCase();
+  return t==='sim'||t==='nao'||t==='não'||(t===''&&/_ligad[oa]$/.test(v.chave));
+}
 async function pageConfig(){
   marcarNav('config');
   const{data,error}=await sb.from('sv_lpjehh_variaveis').select('*').order('chave');
@@ -850,6 +865,15 @@ async function pageConfig(){
   $('pc').innerHTML='<div class="cab"><h2>Configuração</h2></div>'+
     '<div class="sec" style="max-width:860px"><p class="mini" style="margin-bottom:12px">Mudanças valem para o motor em até 5 minutos. Segredos (chaves de API, certificado) não ficam aqui.</p>'+
     (data||[]).map(v=>{
+      // Variável sim/não vira interruptor: um clique liga, outro desliga,
+      // e salva na hora. Antes era texto livre, e "Sim " ou "s" digitado
+      // desligava a função sem aviso (o motor só aceita exatamente "sim").
+      if(ehSimNao(v)){
+        const on=String(v.valor_texto??'').trim().toLowerCase()==='sim';
+        return '<div class="f"><label>'+esc(v.rotulo||v.chave)+' <span class="mini">('+esc(v.chave)+')</span></label>'+
+          '<button type="button" class="sw'+(on?' on':'')+'" data-sw="'+esc(v.chave)+'"><span class="tr"></span><span class="lb">'+(on?'Ligado':'Desligado')+'</span></button>'+
+          (v.descricao?'<div class="mini">'+esc(v.descricao)+'</div>':'')+'</div>';
+      }
       const longo=v.chave==='agente_prompt'||v.chave==='abertura_variantes';
       const val=v.tipo==='numero'?(v.valor_numero??''):(v.valor_texto??'');
       return '<div class="f"><label>'+esc(v.rotulo||v.chave)+' <span class="mini">('+esc(v.chave)+')</span></label>'+
@@ -858,6 +882,24 @@ async function pageConfig(){
         (v.descricao?'<div class="mini">'+esc(v.descricao)+'</div>':'')+'</div>';
     }).join('')+
     '<button class="btn pri" id="cfg-salvar">Salvar tudo</button></div>';
+  document.querySelectorAll('[data-sw]').forEach(b=>b.onclick=async()=>{
+    const k=b.dataset.sw,ligar=!b.classList.contains('on');
+    // motor_ligado é o interruptor geral: ligar sem prompt faria o agente
+    // responder clientes sem instrução nenhuma. Confere o prompt SALVO,
+    // que é o que o motor lê, não o que está digitado na tela.
+    if(k==='motor_ligado'&&ligar){
+      const pr=(data||[]).find(x=>x.chave==='agente_prompt');
+      if(!pr||!String(pr.valor_texto??'').trim()){toast('Salve o prompt do agente antes de ligar o motor.',5000);return;}
+      if(!confirm('Ligar o motor faz o agente começar a responder clientes de verdade. Confirmar?'))return;
+    }
+    b.disabled=true;
+    const r=await sb.from('sv_lpjehh_variaveis').update({valor_texto:ligar?'sim':'nao',atualizado_em:new Date().toISOString()}).eq('chave',k);
+    b.disabled=false;
+    if(falhou(r.error,'salvar '+k))return;
+    const v=(data||[]).find(x=>x.chave===k);if(v)v.valor_texto=ligar?'sim':'nao';
+    b.classList.toggle('on',ligar);b.querySelector('.lb').textContent=ligar?'Ligado':'Desligado';
+    toast((v?.rotulo||k)+(ligar?' ligado.':' desligado.'));
+  });
   $('cfg-salvar').onclick=async()=>{
     const campos=[...document.querySelectorAll('[data-k]')];
     const mudados=campos.filter(el=>{
