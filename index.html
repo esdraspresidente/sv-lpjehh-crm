@@ -178,7 +178,7 @@ input,select,textarea{font:inherit;color:inherit}
     <a href="#/inbox" data-nav="inbox">Caixa de entrada <span class="badge h" id="bdg-inbox"></span></a>
     <a href="#/fila" data-nav="fila">Fila <span class="badge h" id="bdg-fila"></span></a>
     <a href="#/config" data-nav="config" class="so-socio">Configuração</a>
-    <div class="rod"><div id="quem"></div><button id="btn-sair">Sair</button></div>
+    <div class="rod"><div id="quem"></div><button id="btn-senha">Trocar senha</button> · <button id="btn-sair">Sair</button></div>
   </nav>
   <main id="main">
     <div id="topo"><button id="btn-menu">☰</button><b>Vendas de Sites</b></div>
@@ -279,6 +279,20 @@ async function entrar(){
 $('lg-btn').onclick=entrar;
 $('lg-pw').addEventListener('keydown',e=>{if(e.key==='Enter')entrar();});
 $('btn-sair').onclick=async()=>{await sb.auth.signOut();location.hash='';location.reload();};
+// TROCAR SENHA — 30/10/2026. Conta nova nasce com senha temporária
+// (workflow auth-criar-usuario do previmater-ops), entregue por mensagem.
+// Sem este botão ela ficaria valendo para sempre. Pede a nova duas vezes
+// porque não existe "esqueci a senha" aqui: errou a digitação, perdeu o
+// acesso. 8 caracteres é o mínimo do Supabase Auth do projeto.
+$('btn-senha').onclick=async()=>{
+  const nova=prompt('Nova senha (mínimo 8 caracteres):');
+  if(nova==null)return;
+  if(nova.length<8){toast('A senha precisa ter pelo menos 8 caracteres.');return;}
+  if(prompt('Repita a nova senha:')!==nova){toast('As senhas não conferem. Nada foi alterado.');return;}
+  const{error}=await sb.auth.updateUser({password:nova});
+  if(error){toast('Não consegui trocar: '+error.message,5000);return;}
+  toast('Senha trocada.');
+};
 $('btn-menu').onclick=()=>$('side').classList.toggle('aberto');
 
 async function carregarBase(){
