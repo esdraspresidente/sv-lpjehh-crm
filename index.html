@@ -196,6 +196,40 @@ input,select,textarea{font:inherit;color:inherit}
   .ib-volta{display:inline-block}
 }
 @media(min-width:901px){#ib-ver-p{display:none}}
+/* ---------- agenda (mesmo desenho do Diligências) ---------- */
+.ag-ctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ag-ctl select{border:1px solid var(--border);border-radius:8px;padding:7px 9px;background:var(--white)}
+.ag-nav{display:flex;align-items:center;gap:6px}
+.ag-nav button{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--white)}
+.ag-mes{font-weight:800;min-width:130px;text-align:center}
+.ag-leg{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--text2);font-weight:600}
+.ag-leg span{display:inline-flex;align-items:center;gap:5px}
+.ag-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.ag-sem{font-size:11px;font-weight:700;color:var(--text3);text-align:center;padding:4px 0}
+.ag-cel{min-height:62px;border:1px solid var(--border2);border-radius:10px;padding:5px;background:var(--white);cursor:pointer;min-width:0}
+.ag-cel:hover{border-color:var(--brand)}
+.ag-cel.vazia{background:transparent;border-color:transparent;cursor:default}
+.ag-cel.fds{background:#F8FAFC}
+.ag-cel.hoje{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.ag-cel.passado .ag-num{color:var(--text3)}
+.ag-num{font-size:12px;font-weight:800;color:var(--text2)}
+.ag-bdg{display:flex;gap:3px;flex-wrap:wrap;margin-top:4px;align-items:center}
+.ag-call{background:var(--brand);color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:6px}
+.ag-cad{color:var(--red);display:inline-flex}
+.ag-cad svg,.ag-leg svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+#ag-modal{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px}
+#ag-box{background:var(--bg);border-radius:var(--rl);width:min(560px,100%);max-height:92vh;overflow-y:auto;padding:16px}
+.ag-mh{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.ag-mh h3{flex:1;text-align:center;font-size:15px}
+.ag-blq{background:var(--red-bg);color:var(--red);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+.ag-blq .grow{flex:1;min-width:0}
+.ag-livres{display:flex;gap:6px;flex-wrap:wrap}
+.ag-livres button{border:1px solid #BBF7D0;background:var(--green-bg);color:var(--green);border-radius:8px;padding:5px 10px;font-weight:700;font-size:12px}
+.ag-livres button.on{background:var(--green);color:#fff}
+.st-marcada{background:var(--brand-l);color:var(--brand-d)}
+.st-realizada{background:var(--green-bg);color:var(--green)}
+.st-cancelada{background:var(--bg);color:var(--text3)}
+.st-faltou{background:var(--yellow-bg);color:var(--yellow)}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#0F172A;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;font-size:13px;max-width:90%}
 </style>
 </head>
@@ -219,6 +253,7 @@ input,select,textarea{font:inherit;color:inherit}
     <a href="#/quadro/producao" data-nav="producao">Produção</a>
     <a href="#/inbox" data-nav="inbox">Caixa de entrada <span class="badge h" id="bdg-inbox"></span></a>
     <a href="#/fila" data-nav="fila">Fila <span class="badge h" id="bdg-fila"></span></a>
+    <a href="#/agenda" data-nav="agenda">Agenda</a>
     <a href="#/config" data-nav="config" class="so-socio">Configuração</a>
     <div class="rod"><div id="quem"></div><button id="btn-senha">Trocar senha</button> · <button id="btn-sair">Sair</button></div>
   </nav>
@@ -355,6 +390,7 @@ function marcarNav(n){document.querySelectorAll('#side a').forEach(a=>a.classLis
 function route(){
   if(!U)return;
   pararInbox(); // a Caixa de entrada atualiza sozinha; fora dela, para
+  if($('ag-modal'))agFecharDia(); // modal do dia da Agenda não sobra em outra tela
   const r=(location.hash.slice(1)||'/').split('?')[0];
   if(r==='/'){location.hash='#/quadro/comercial';return;}
   let m;
@@ -362,6 +398,7 @@ function route(){
   if(m=r.match(/^\/cliente\/([0-9a-f-]{36})$/)){location.replace('#/quadro/comercial');setTimeout(()=>abrirCard(m[1]),0);return;}
   if(r==='/inbox')return pageInbox();
   if(r==='/fila')return pageFila();
+  if(r==='/agenda')return pageAgenda();
   if(r==='/config'&&ehSocio())return pageConfig();
   $('pc').innerHTML='<div class="emp">Tela não encontrada</div>';
 }
@@ -1108,6 +1145,284 @@ async function pageConfig(){
     }
     toast(mudados.length+' configuração(ões) salva(s).');pageConfig();
   };
+}
+
+// ============================================================
+// AGENDA DE CALLS (app) — mesmo desenho da agenda do Diligências:
+// calendário do mês com "Ver agenda de", modal do dia e bloqueios.
+//
+// A REGRA DE HORÁRIO LIVRE NÃO ESTÁ AQUI. Janela (seg a sex, 9h–12h e
+// 14h–18h, horários de 1 hora), bloqueios e calls marcadas são
+// conferidos pela função sv_lpjehh_horarios_livres
+// (_sql/sv_lpjehh_10_agenda.sql). O motor da Vanessa pergunta para a
+// mesma função: uma segunda cópia da janela aqui no JS divergiria na
+// primeira mudança de horário.
+//
+// Bloqueio = o que impede a Vanessa de marcar. Quem não vai atender,
+// bloqueia (inclusive feriado: a função não conhece feriados).
+// ============================================================
+const AG_MESES=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const AG_DIAS=['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+const AG_CAD='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+const AG_ST={marcada:'Marcada',realizada:'Realizada',cancelada:'Cancelada',faltou:'Cliente faltou'};
+// Estado da tela. perfil '' = todos.
+let AG={mes:null,perfil:'',pessoas:[],calls:[],bloqs:[],dia:null,editBloq:null,slot:null};
+
+function agISO(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function agHora(iso){const d=new Date(iso);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function agNome(uid){return AG.pessoas.find(p=>p.id===uid)?.nome||'—';}
+function agPeriodo(b){return(!b.horario_inicio&&!b.horario_fim)?'Dia inteiro':(b.horario_inicio||'00:00').slice(0,5)+' – '+(b.horario_fim||'24:00').slice(0,5);}
+function agDoPerfil(lista){return AG.perfil?lista.filter(x=>x.usuario_id===AG.perfil):lista;}
+function agDataLonga(iso){const d=new Date(iso+'T12:00:00');return AG_DIAS[d.getDay()]+', '+d.getDate()+' de '+AG_MESES[d.getMonth()].toLowerCase()+' de '+d.getFullYear();}
+
+async function pageAgenda(){
+  marcarNav('agenda');
+  if(!AG.mes){const h=new Date();AG.mes=new Date(h.getFullYear(),h.getMonth(),1);}
+  // atende_calls separado do USUARIOS global: lá só tem id e nome, e
+  // quem não atende call não deve aparecer na agenda.
+  const u=await sb.from('sv_lpjehh_usuarios').select('id,nome,atende_calls').eq('ativo',true).order('nome');
+  if(falhou(u.error,'carregar os sócios'))return;
+  AG.pessoas=(u.data||[]).filter(x=>x.atende_calls);
+  const opPessoas=sel=>AG.pessoas.map(p=>'<option value="'+p.id+'"'+(p.id===sel?' selected':'')+'>'+esc(p.nome)+'</option>').join('');
+  $('pc').innerHTML=
+    '<div class="cab"><h2>Agenda de calls</h2><div class="ag-ctl">'+
+      '<label class="mini">Ver agenda de <select id="ag-perfil"><option value="">Todos</option>'+opPessoas(AG.perfil)+'</select></label>'+
+      '<div class="ag-nav"><button id="ag-ant" title="Mês anterior">‹</button><span class="ag-mes" id="ag-mes"></span><button id="ag-prox" title="Próximo mês">›</button></div>'+
+    '</div></div>'+
+    '<div class="ag-leg"><span><span class="ag-call">2</span> calls marcadas</span><span><span class="ag-cad">'+AG_CAD+'</span> bloqueio</span>'+
+      '<span>Atendimento: seg a sex, 9h–12h e 14h–18h, horários de 1 hora.</span></div>'+
+    '<div class="sec"><div class="ag-grid" id="ag-grid"><div class="emp" style="grid-column:1/-1">Carregando…</div></div></div>'+
+    '<div class="sec" id="bl-form"><h4 id="bl-tit">Novo bloqueio</h4>'+
+      '<div class="g2">'+
+        '<div class="f"><label>Quem fica indisponível *</label><select id="bl-quem">'+opPessoas(AG.pessoas.some(p=>p.id===U.id)?U.id:'')+'</select></div>'+
+        '<div class="f"><label>Data *</label><input type="date" id="bl-data"/></div>'+
+        '<div class="f"><label>Início</label><input type="time" id="bl-ini"/></div>'+
+        '<div class="f"><label>Fim</label><input type="time" id="bl-fim"/></div>'+
+      '</div>'+
+      '<label class="mini" style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input type="checkbox" id="bl-dia"/> Bloquear o dia inteiro</label>'+
+      '<div class="f"><label>Motivo</label><input id="bl-mot" placeholder="Ex.: compromisso pessoal, feriado"/></div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn pri" id="bl-salvar">+ Adicionar bloqueio</button><button class="btn h" id="bl-cancelar">Cancelar edição</button></div>'+
+    '</div>'+
+    '<div class="cab"><h2 style="font-size:15px">Próximos bloqueios</h2></div><div class="tb" id="bl-lista"><div class="emp">Carregando…</div></div>';
+  $('ag-perfil').onchange=e=>{AG.perfil=e.target.value;agRender();agRenderBloqLista();};
+  $('ag-ant').onclick=()=>agMudaMes(-1);
+  $('ag-prox').onclick=()=>agMudaMes(1);
+  $('bl-dia').onchange=agToggleDia;
+  $('bl-salvar').onclick=agSalvarBloq;
+  $('bl-cancelar').onclick=agLimparBloq;
+  await agCarregar();
+}
+
+async function agMudaMes(delta){
+  AG.mes=new Date(AG.mes.getFullYear(),AG.mes.getMonth()+delta,1);
+  await agCarregar();
+}
+
+// Mês inteiro de calls e bloqueios, mais os próximos bloqueios para a
+// lista. Um mês de calls é bem menos que as 1000 linhas do PostgREST;
+// o limit fica explícito para não cortar em silêncio se um dia passar.
+async function agCarregar(){
+  const ini=AG.mes,fim=new Date(AG.mes.getFullYear(),AG.mes.getMonth()+1,1);
+  const[c,b,p]=await Promise.all([
+    sb.from('sv_lpjehh_calls').select('id,cliente_id,usuario_id,inicio,fim,status,origem,observacao,sv_lpjehh_clientes(nome)').gte('inicio',ini.toISOString()).lt('inicio',fim.toISOString()).order('inicio').limit(1000),
+    sb.from('sv_lpjehh_bloqueios').select('*').gte('data',agISO(ini)).lt('data',agISO(fim)).order('data').limit(1000),
+    sb.from('sv_lpjehh_bloqueios').select('*').gte('data',agISO(new Date())).order('data').order('horario_inicio').limit(200)
+  ]);
+  if(falhou(c.error,'carregar as calls')||falhou(b.error,'carregar os bloqueios')||falhou(p.error,'carregar os bloqueios'))return;
+  AG.calls=c.data||[];AG.bloqs=b.data||[];AG.prox=p.data||[];
+  agRender();agRenderBloqLista();
+  if(AG.dia)agRenderDia();
+}
+
+function agRender(){
+  if(!$('ag-grid'))return;
+  $('ag-mes').textContent=AG_MESES[AG.mes.getMonth()]+' '+AG.mes.getFullYear();
+  const ano=AG.mes.getFullYear(),mes=AG.mes.getMonth();
+  const dias=new Date(ano,mes+1,0).getDate(),primeiro=new Date(ano,mes,1).getDay();
+  const hoje=agISO(new Date());
+  const qt={},blq={};
+  // Cancelada não conta: o dia fica com cara de livre, que é o que é.
+  agDoPerfil(AG.calls).filter(x=>x.status!=='cancelada').forEach(x=>{const k=agISO(new Date(x.inicio));qt[k]=(qt[k]||0)+1;});
+  agDoPerfil(AG.bloqs).forEach(x=>blq[x.data]=true);
+  let h=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d=>'<div class="ag-sem">'+d+'</div>').join('');
+  for(let i=0;i<primeiro;i++)h+='<div class="ag-cel vazia"></div>';
+  for(let d=1;d<=dias;d++){
+    const iso=ano+'-'+String(mes+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    const sem=new Date(ano,mes,d).getDay();
+    let cls='ag-cel';
+    if(sem===0||sem===6)cls+=' fds';
+    if(iso===hoje)cls+=' hoje';else if(iso<hoje)cls+=' passado';
+    let bd='';
+    if(qt[iso])bd+='<span class="ag-call">'+qt[iso]+'</span>';
+    if(blq[iso])bd+='<span class="ag-cad">'+AG_CAD+'</span>';
+    h+='<div class="'+cls+'" data-dia="'+iso+'"><div class="ag-num">'+d+'</div>'+(bd?'<div class="ag-bdg">'+bd+'</div>':'')+'</div>';
+  }
+  $('ag-grid').innerHTML=h;
+  $('ag-grid').querySelectorAll('[data-dia]').forEach(el=>el.onclick=()=>agAbrirDia(el.dataset.dia));
+}
+
+// ---------- modal do dia ----------
+function agAbrirDia(iso){
+  AG.dia=iso;AG.slot=null;
+  if(!$('ag-modal')){
+    document.body.insertAdjacentHTML('beforeend','<div id="ag-modal" class="h"><div id="ag-box"></div></div>');
+    $('ag-modal').onclick=e=>{if(e.target.id==='ag-modal')agFecharDia();};
+  }
+  $('ag-modal').classList.remove('h');
+  agRenderDia();
+}
+function agFecharDia(){AG.dia=null;AG.slot=null;$('ag-modal')?.classList.add('h');}
+async function agNavDia(delta){
+  const d=new Date(AG.dia+'T12:00:00');d.setDate(d.getDate()+delta);
+  AG.dia=agISO(d);AG.slot=null;
+  // Passou para outro mês: recarrega o mês, senão o modal mostraria
+  // o dia vazio (as calls daquele mês não estão em memória).
+  if(d.getMonth()!==AG.mes.getMonth()||d.getFullYear()!==AG.mes.getFullYear()){AG.mes=new Date(d.getFullYear(),d.getMonth(),1);await agCarregar();}
+  else agRenderDia();
+}
+
+async function agRenderDia(){
+  const iso=AG.dia;if(!iso)return;
+  const bl=agDoPerfil(AG.bloqs).filter(b=>b.data===iso);
+  const cs=agDoPerfil(AG.calls).filter(c=>agISO(new Date(c.inicio))===iso).sort((a,b)=>a.inicio.localeCompare(b.inicio));
+  let h='<div class="ag-mh"><button class="btn sm" id="agd-ant">‹</button><h3>'+esc(agDataLonga(iso))+'</h3><button class="btn sm" id="agd-prox">›</button><button class="btn sm" id="agd-x" title="Fechar">✕</button></div>';
+  h+=bl.map(b=>'<div class="ag-blq"><span class="ag-cad">'+AG_CAD+'</span><div class="grow"><b>'+esc(agNome(b.usuario_id))+'</b> indisponível — '+agPeriodo(b)+(b.motivo?' ('+esc(b.motivo)+')':'')+'</div>'+
+    '<button class="btn sm" data-ebl="'+b.id+'">Editar</button><button class="btn sm red" data-rbl="'+b.id+'">Remover</button></div>').join('');
+  h+='<div class="sec"><h4>Calls ('+cs.length+')</h4>'+(cs.length?cs.map(c=>
+    '<div class="lin" style="flex-wrap:wrap"><div style="flex:1 1 200px;min-width:0"><b>'+agHora(c.inicio)+'</b> · <span class="click" data-card="'+(c.cliente_id||'')+'" style="cursor:pointer;text-decoration:underline">'+esc(c.sv_lpjehh_clientes?.nome||'sem cliente')+'</span>'+
+      '<div class="mini">com '+esc(agNome(c.usuario_id))+' · '+(c.origem==='vanessa'?'marcada pela Vanessa':'marcada no CRM')+'</div></div>'+
+      '<span class="tag st-'+c.status+'">'+AG_ST[c.status]+'</span>'+
+      (c.status==='marcada'?'<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-st="realizada" data-call="'+c.id+'">Realizada</button><button class="btn sm" data-st="faltou" data-call="'+c.id+'">Faltou</button><button class="btn sm red" data-st="cancelada" data-call="'+c.id+'">Cancelar</button></div>':'')+
+    '</div>').join(''):'<div class="mini">Nenhuma call neste dia.</div>')+'</div>';
+  h+='<div class="sec"><h4>Horários livres</h4><div id="agd-livres" class="mini">Carregando…</div><div id="agd-marcar"></div></div>';
+  h+='<button class="btn" style="width:100%" id="agd-bloq">+ Bloquear horário neste dia</button>';
+  $('ag-box').innerHTML=h;
+  $('agd-ant').onclick=()=>agNavDia(-1);$('agd-prox').onclick=()=>agNavDia(1);$('agd-x').onclick=agFecharDia;
+  $('agd-bloq').onclick=()=>{agLimparBloq();$('bl-data').value=iso;if(AG.perfil)$('bl-quem').value=AG.perfil;agFecharDia();$('bl-form').scrollIntoView({behavior:'smooth'});};
+  $('ag-box').querySelectorAll('[data-ebl]').forEach(b=>b.onclick=()=>{agEditarBloq(b.dataset.ebl);agFecharDia();});
+  $('ag-box').querySelectorAll('[data-rbl]').forEach(b=>b.onclick=()=>agRemoverBloq(b.dataset.rbl));
+  $('ag-box').querySelectorAll('[data-call]').forEach(b=>b.onclick=()=>agStatusCall(b.dataset.call,b.dataset.st));
+  $('ag-box').querySelectorAll('[data-card]').forEach(b=>b.onclick=()=>{if(!b.dataset.card)return;agFecharDia();abrirCard(b.dataset.card);});
+  // Horários livres pela mesma função do motor, sem antecedência: aqui
+  // é o sócio marcando, ele sabe se dá tempo.
+  const de=new Date(iso+'T00:00:00'),ate=new Date(iso+'T23:59:59');
+  const{data,error}=await sb.rpc('sv_lpjehh_horarios_livres',{p_de:de.toISOString(),p_ate:ate.toISOString(),p_antecedencia:'0 hours'});
+  if(AG.dia!==iso||!$('agd-livres'))return; // trocou de dia enquanto carregava
+  if(error){$('agd-livres').textContent='Erro ao ler os horários: '+error.message;return;}
+  const porHora={};
+  (data||[]).filter(x=>!AG.perfil||x.usuario_id===AG.perfil).forEach(x=>{(porHora[x.inicio]=porHora[x.inicio]||[]).push(x);});
+  const hs=Object.keys(porHora).sort();
+  if(!hs.length){$('agd-livres').textContent='Nenhum horário livre (passou, é fim de semana, ou está tudo bloqueado/ocupado).';return;}
+  $('agd-livres').innerHTML='<div class="ag-livres">'+hs.map(k=>'<button data-slot="'+k+'" title="Livre: '+esc(porHora[k].map(x=>x.usuario_nome).join(', '))+'">'+agHora(k)+'</button>').join('')+'</div><div class="mini" style="margin-top:6px">Toque num horário para marcar uma call manual.</div>';
+  $('agd-livres').querySelectorAll('[data-slot]').forEach(b=>b.onclick=()=>{AG.slot=b.dataset.slot;$('agd-livres').querySelectorAll('[data-slot]').forEach(x=>x.classList.toggle('on',x===b));agFormMarcar(porHora[b.dataset.slot]);});
+}
+
+// ---------- call manual ----------
+function agFormMarcar(livres){
+  $('agd-marcar').innerHTML='<div style="margin-top:12px">'+
+    '<div class="f"><label>Cliente *</label><input id="agm-busca" placeholder="Digite o nome do cliente"/><select id="agm-cli" size="4" style="margin-top:4px"></select></div>'+
+    '<div class="f"><label>Com quem</label><select id="agm-quem"><option value="">Quem estiver livre</option>'+livres.map(x=>'<option value="'+x.usuario_id+'">'+esc(x.usuario_nome)+'</option>').join('')+'</select></div>'+
+    '<button class="btn pri" id="agm-ok">Marcar call às '+agHora(AG.slot)+'</button></div>';
+  let t=null;
+  $('agm-busca').oninput=e=>{clearTimeout(t);t=setTimeout(()=>agBuscarCliente(e.target.value.trim()),300);};
+  $('agm-ok').onclick=agMarcarManual;
+}
+async function agBuscarCliente(txt){
+  if(txt.length<2){$('agm-cli').innerHTML='';return;}
+  const{data,error}=await sb.from('sv_lpjehh_clientes').select('id,nome,telefone_chave').ilike('nome','%'+txt.replace(/[%_]/g,'')+'%').order('nome').limit(20);
+  if(falhou(error,'buscar cliente'))return;
+  $('agm-cli').innerHTML=(data||[]).map(c=>'<option value="'+c.id+'">'+esc(c.nome||'sem nome')+(c.telefone_chave?' · final '+esc(String(c.telefone_chave).slice(-4)):'')+'</option>').join('');
+  if(data&&data.length===1)$('agm-cli').value=data[0].id;
+}
+async function agMarcarManual(){
+  const cli=$('agm-cli').value;
+  if(!cli){toast('Escolha o cliente na lista.');return;}
+  $('agm-ok').disabled=true;
+  const{data,error}=await sb.rpc('sv_lpjehh_marcar_call',{p_cliente:cli,p_inicio:AG.slot,p_origem:'manual',p_usuario:$('agm-quem').value||null,p_criado_por:U.id});
+  $('agm-ok').disabled=false;
+  if(falhou(error,'marcar a call'))return;
+  if(!data||!data.id){toast('Esse horário não está mais livre. Escolha outro.',4000);agRenderDia();return;}
+  await agMarcaNoCliente(cli,data.inicio);
+  await sb.from('sv_lpjehh_atividades').insert({cliente_id:cli,tipo:'agenda',descricao:'Call marcada no CRM por '+U.nome+' para '+dataHora(data.inicio)+' com '+agNome(data.usuario_id)+'.'});
+  toast('Call marcada. Avise o cliente pela conversa.',4000);
+  await agCarregar();
+}
+// call_marcada no card faz a Vanessa parar de oferecer horário a quem
+// já tem call; call_pedida para o follow-up "fu_call". Cancelar limpa
+// call_marcada, para ela voltar a oferecer se ele quiser remarcar.
+async function agMarcaNoCliente(cli,inicio){
+  const{data}=await sb.from('sv_lpjehh_clientes').select('agente_dados').eq('id',cli).limit(1);
+  const d=Object.assign({},data?.[0]?.agente_dados||{});
+  if(inicio){d.call_marcada=inicio;d.call_pedida=true;}else delete d.call_marcada;
+  const r=await sb.from('sv_lpjehh_clientes').update({agente_dados:d}).eq('id',cli);
+  falhou(r.error,'atualizar o card do cliente');
+}
+async function agStatusCall(id,st){
+  const c=AG.calls.find(x=>x.id===id);if(!c)return;
+  if(st==='cancelada'&&!confirm('Cancelar a call de '+(c.sv_lpjehh_clientes?.nome||'sem cliente')+' às '+agHora(c.inicio)+'? O horário fica livre de novo. O cliente NÃO é avisado sozinho.'))return;
+  const r=await sb.from('sv_lpjehh_calls').update({status:st}).eq('id',id);
+  if(falhou(r.error,'atualizar a call'))return;
+  if(c.cliente_id){
+    if(st==='cancelada')await agMarcaNoCliente(c.cliente_id,null);
+    await sb.from('sv_lpjehh_atividades').insert({cliente_id:c.cliente_id,tipo:'agenda',descricao:'Call de '+dataHora(c.inicio)+': '+AG_ST[st].toLowerCase()+' ('+U.nome+').'});
+  }
+  toast(st==='cancelada'?'Call cancelada. Avise o cliente pela conversa.':'Call marcada como '+AG_ST[st].toLowerCase()+'.',4000);
+  await agCarregar();
+}
+
+// ---------- bloqueios ----------
+function agToggleDia(){
+  const on=$('bl-dia').checked;
+  $('bl-ini').disabled=on;$('bl-fim').disabled=on;
+  if(on){$('bl-ini').value='';$('bl-fim').value='';}
+}
+function agLimparBloq(){
+  if(!$('bl-data'))return;
+  AG.editBloq=null;
+  ['bl-data','bl-ini','bl-fim','bl-mot'].forEach(i=>$(i).value='');
+  $('bl-dia').checked=false;agToggleDia();
+  $('bl-tit').textContent='Novo bloqueio';$('bl-salvar').textContent='+ Adicionar bloqueio';$('bl-cancelar').classList.add('h');
+}
+function agEditarBloq(id){
+  const b=[...AG.bloqs,...(AG.prox||[])].find(x=>x.id===id);if(!b)return;
+  AG.editBloq=id;
+  $('bl-quem').value=b.usuario_id;$('bl-data').value=b.data;$('bl-mot').value=b.motivo||'';
+  $('bl-dia').checked=!b.horario_inicio&&!b.horario_fim;agToggleDia();
+  $('bl-ini').value=(b.horario_inicio||'').slice(0,5);$('bl-fim').value=(b.horario_fim||'').slice(0,5);
+  $('bl-tit').textContent='Editar bloqueio';$('bl-salvar').textContent='Salvar alterações';$('bl-cancelar').classList.remove('h');
+  $('bl-form').scrollIntoView({behavior:'smooth'});
+}
+async function agSalvarBloq(){
+  const quem=$('bl-quem').value,data=$('bl-data').value,dia=$('bl-dia').checked;
+  const ini=dia?null:($('bl-ini').value||null),fim=dia?null:($('bl-fim').value||null);
+  if(!quem){toast('Escolha quem fica indisponível.');return;}
+  if(!data){toast('Informe a data.');return;}
+  if(ini&&fim&&fim<=ini){toast('O fim tem que ser depois do início.');return;}
+  // Call já marcada no período: avisa, igual ao Diligências. Bloquear
+  // NÃO desmarca a call — quem bloqueou decide se cancela.
+  const di=new Date(data+'T'+(ini||'00:00')+':00'),df=fim?new Date(data+'T'+fim+':00'):new Date(new Date(data+'T00:00:00').getTime()+86400000);
+  const{data:ch,error:erroCh}=await sb.from('sv_lpjehh_calls').select('inicio,sv_lpjehh_clientes(nome)').eq('usuario_id',quem).eq('status','marcada').lt('inicio',df.toISOString()).gt('fim',di.toISOString()).limit(20);
+  if(falhou(erroCh,'conferir as calls'))return;
+  if(ch&&ch.length&&!confirm(agNome(quem)+' já tem call marcada nesse período:\n'+ch.map(c=>'• '+agHora(c.inicio)+' — '+(c.sv_lpjehh_clientes?.nome||'sem cliente')).join('\n')+'\n\nBloquear mesmo assim? A call NÃO é desmarcada.'))return;
+  const reg={usuario_id:quem,data,horario_inicio:ini,horario_fim:fim,motivo:$('bl-mot').value.trim()||null};
+  const r=AG.editBloq?await sb.from('sv_lpjehh_bloqueios').update(reg).eq('id',AG.editBloq):await sb.from('sv_lpjehh_bloqueios').insert({...reg,criado_por:U.id});
+  if(falhou(r.error,'salvar o bloqueio'))return;
+  toast(AG.editBloq?'Bloqueio atualizado.':'Bloqueio adicionado.');
+  agLimparBloq();await agCarregar();
+}
+async function agRemoverBloq(id){
+  if(!confirm('Remover este bloqueio? O horário volta a ficar livre para a Vanessa marcar.'))return;
+  const r=await sb.from('sv_lpjehh_bloqueios').delete().eq('id',id);
+  if(falhou(r.error,'remover o bloqueio'))return;
+  toast('Bloqueio removido.');await agCarregar();
+}
+function agRenderBloqLista(){
+  if(!$('bl-lista'))return;
+  const l=agDoPerfil(AG.prox||[]);
+  $('bl-lista').innerHTML=l.length?l.map(b=>'<div class="tr"><div class="grow"><b>'+esc(agNome(b.usuario_id))+' · '+dataBR(b.data)+' · '+agPeriodo(b)+'</b>'+(b.motivo?'<div class="mini">'+esc(b.motivo)+'</div>':'')+'</div>'+
+    '<button class="btn sm" data-ebl="'+b.id+'">Editar</button><button class="btn sm red" data-rbl="'+b.id+'">Remover</button></div>').join(''):'<div class="emp">Nenhum bloqueio daqui para frente.</div>';
+  $('bl-lista').querySelectorAll('[data-ebl]').forEach(b=>b.onclick=()=>agEditarBloq(b.dataset.ebl));
+  $('bl-lista').querySelectorAll('[data-rbl]').forEach(b=>b.onclick=()=>agRemoverBloq(b.dataset.rbl));
 }
 
 sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'){U=null;mostrarLogin();}});
